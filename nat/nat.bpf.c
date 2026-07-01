@@ -99,17 +99,16 @@ int nat(struct xdp_md *ctx) {
     if (ip < 0){
         return XDP_DROP;
     }
-    
+
     __be32 *nat_ip = bpf_map_lookup_elem(&external_map, &ip);
     if (nat_ip == NULL){
-        bpf_printk("nat_ip is NULL\n");
         return XDP_DROP;
     }
 
     if (update_ipaddr(data, data_end, *nat_ip) < 0){
         return XDP_DROP;
     }
-    return XDP_DROP;
+    return XDP_TX;
 };
 
 

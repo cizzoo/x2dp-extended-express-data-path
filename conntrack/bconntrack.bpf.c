@@ -37,7 +37,6 @@ struct t_meta
     unsigned short len3;
 };
 
-
 static FORCE_INLINE int track(struct packetHeaders *pkt){
     struct ct_k key;
     __builtin_memset(&key, 0, sizeof(key));
@@ -160,7 +159,6 @@ static FORCE_INLINE int track(struct packetHeaders *pkt){
                                   "state from "
                                   "ESTABLISHED to FIN_WAIT_1. Seq: %u\n",
                                   value->sequence);
-
                     goto PASS_ACTION;
                 } else {
                     value->ttl = timestamp + TCP_ESTABLISHED;
@@ -535,7 +533,6 @@ PASS_ACTION:;
 
     // return bpf_redirect(conntrack_cfg.if_index_if2, 0);
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-
 }
 
 
@@ -560,24 +557,26 @@ int bconntrack(struct xdp_md *ctx) {
 
     __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
     __u16 lentot = 0;
-
+    //bpf_printk("ciao\n");
     for( int i = 0; i < 4; i++ ) {
         if(bpf_ntohs(md->valid) & (1 << i)) {
+	    //bpf_printk("ciao %d\n",i);
 
             struct packetHeaders pkt;
 
             rc = parse_packet(data+(lentot &0x1FFF), data_end, &pkt);
+            // bpf_log_err("Parsing packet %d\n lentot = %u", i,lentot);
             if (rc < 0){
-            bpf_log_err("Packet 1 parsing failed.\n");
+            bpf_log_err("Packet %d parsing failed.\n", i);
             goto DROP;
             }
             rc = track(&pkt);
             if(rc < 0){
-                bpf_log_err("Tracking pkt 1 failed.\n");
+                bpf_log_err("Tracking pkt %d failed.\n",i);
                 goto DROP;
             }
     
-            lentot += lens[i];
+            lentot += lens[0];
     
         }
     }
@@ -611,7 +610,7 @@ int bconntrack(struct xdp_md *ctx) {
     //     bpf_log_err("Tracking pkt 2 failed.\n");
     //     goto DROP;
     // }
-    
+    // bpf_log_err("end main!\n");
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     
 

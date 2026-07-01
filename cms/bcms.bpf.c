@@ -161,16 +161,11 @@ int bcms(struct xdp_md *ctx)
     {
         bpf_printk("md + 1 > data\n");
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-        // return XDP_PASS + (XDP_PASS << 4) + (XDP_PASS << 8) + (XDP_PASS << 12);
     }
-
     __u16 lentot = 0;
     __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-
-    // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-    // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
-
     __u32 zero = 0;
+
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
@@ -179,24 +174,17 @@ int bcms(struct xdp_md *ctx)
         if(bpf_ntohs(md->valid) & (1 << i)) {
 
             struct pkt_5tuple pkt;
-            __u16 pkt_hashes[4];            
-
-            
+            __u16 pkt_hashes[4];
             int ret = handle_pkt(data + (lentot & 0x1FFF), data_end, &pkt);
             if (ret){
-                bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-                bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
                 bpf_printk("handle_pkt failed at i %d\n", i);
-                bpf_printk("len %d lens[i]%d, lentot %d\n",i, lens[i], lentot);
                 return ret;
             }
             hash(&pkt, sizeof(pkt), pkt_hashes);
             countmin_add(cm, pkt_hashes);
-            
-            lentot += lens[i];
+            lentot += lens[0]; //era lens[i] prova per 8 pacchetti batch
         }
     }
-    
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 

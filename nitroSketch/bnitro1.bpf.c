@@ -189,7 +189,7 @@ int bnitro1(struct xdp_md *ctx)
                 countmin_add(cm, pkt_hashes);
                 
             }
-            lentot += lens[i];
+            lentot += lens[0];
         }
     }
     

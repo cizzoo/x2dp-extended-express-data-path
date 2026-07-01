@@ -245,7 +245,7 @@ int bnitro2(struct xdp_md *ctx)
             hash(&pkt, sizeof(pkt), pkt_hashes);
             nitro_update(cm, pkt_hashes, geo, row_to_update, next_geo_value);
                 
-            lentot += lens[i];
+            lentot += lens[0];
         }
     }
     

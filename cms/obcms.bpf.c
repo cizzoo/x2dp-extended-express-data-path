@@ -141,7 +141,6 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
 SEC("xdp")
 int obcms(struct xdp_md *ctx)
 {
-
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
     void *data_meta = (void *)(long)ctx->data_meta;
@@ -150,35 +149,22 @@ int obcms(struct xdp_md *ctx)
     {
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-
     __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-
     __u32 zero = 0;
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-    struct pkt_5tuple pkt1;
-    struct pkt_5tuple pkt2;
-    struct pkt_5tuple pkt3;
-    struct pkt_5tuple pkt4;
-    __u16 pkt_hashes1[4];
-    __u16 pkt_hashes2[4];
-    __u16 pkt_hashes3[4];
-    __u16 pkt_hashes4[4];
+    struct pkt_5tuple pkt1, pkt2, pkt3, pkt4;
+    __u16 pkt_hashes1[4], pkt_hashes2[4], pkt_hashes3[4], pkt_hashes4[4];
     int ret1 = handle_pkt(data, data_end, &pkt1);
     int ret2 = handle_pkt(data+(lens[0] &0x1FFF), data_end, &pkt2);
     int ret3 = handle_pkt(data+((lens[0]+lens[1])&0x1FFF), data_end, &pkt3);
     int ret4 = handle_pkt(data+((lens[0]+lens[1]+lens[2])&0x1FFF), data_end, &pkt4);
     if (ret1 || ret2 || ret3 || ret4){
-    // if (ret1 || ret2 || ret3){
-    // if (ret1 || ret2){
-        // bpf_printk("ret1: %d ret2: %d ret3: %d ret4:%d\n", ret1, ret2, ret3, ret4);
-        bpf_printk("ret1: %d ret2: %d\n", ret1, ret2);
         bpf_printk("handle_pkt failed\n");
         return ret1;
     }
-
     hash(&pkt1, sizeof(pkt1), pkt_hashes1);
     hash(&pkt2, sizeof(pkt2), pkt_hashes2);
     hash(&pkt3, sizeof(pkt3), pkt_hashes3);
@@ -187,8 +173,6 @@ int obcms(struct xdp_md *ctx)
     countmin_add(cm, pkt_hashes2);
     countmin_add(cm, pkt_hashes3);
     countmin_add(cm, pkt_hashes4);
-
-    
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 

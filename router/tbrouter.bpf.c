@@ -84,7 +84,7 @@ int tbrouter(struct xdp_md *ctx) {
       //     // goto end;
       // }
 
-      lentot += lens[i];
+      lentot += lens[0];
     }
   }
 

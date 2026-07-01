@@ -146,8 +146,6 @@ int cms(struct xdp_md *ctx)
         return ret;
     hash(&pkt1, sizeof(pkt1), pkt1_hashes);
     countmin_add(cm, pkt1_hashes);
-    // bpf_printk("src_ip: %x, dst_ip: %x, src_port: %d, dst_port: %d, proto: %d\n",
-    //            pkt1.src_ip, pkt1.dst_ip, bpf_ntohs(pkt1.src_port), bpf_ntohs(pkt1.dst_port), pkt1.proto);
     return XDP_DROP;
 }
 

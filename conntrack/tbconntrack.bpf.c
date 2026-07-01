@@ -567,7 +567,7 @@ int tbconntrack(struct xdp_md *ctx) {
         if(bpf_ntohs(md->valid) & (1 << i)) {
 
             struct packetHeaders pkt;
-            
+
             rc = parse_packet(data+(lentot &0x1FFF), data_end, &pkt);
             // bpf_log_err("Parsing packet %d\n lentot = %u", i,lentot);
             if (rc < 0){
@@ -580,7 +580,6 @@ int tbconntrack(struct xdp_md *ctx) {
                 goto DROP;
             }
     
-
             lentot += lens[i];
     
         }

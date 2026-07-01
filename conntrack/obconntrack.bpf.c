@@ -534,7 +534,6 @@ PASS_ACTION:;
 
     // return bpf_redirect(conntrack_cfg.if_index_if2, 0);
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-
 }
 
 

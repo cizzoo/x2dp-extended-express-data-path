@@ -98,54 +98,36 @@ int tobnat(struct xdp_md *ctx) {
     if ((void *)(md + 1) > data) {
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-
     __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
                                      bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-    __be32 ip1;
-    __be32 ip2;
-    __be32 ip3;
-    __be32 ip4;
-    __be32 *nat_ip1;
-    __be32 *nat_ip2;
-    __be32 *nat_ip3;
-    __be32 *nat_ip4;
+    __be32 ip1, ip2, ip3, ip4;
+    __be32 *nat_ip1, *nat_ip2, *nat_ip3, *nat_ip4;
     ip1 = get_ip(data, data_end);
     ip2 = get_ip(data + (lens[0] & 0x1FFF), data_end);
     ip3 = get_ip(data + (lens[0] +lens[1] & 0x1FFF), data_end);
     ip4 = get_ip(data + (lens[0] +lens[1] +lens[2] & 0x1FFF), data_end);
-
     if (ip1 < 0 || ip2 < 0 || ip3 < 0 || ip4 < 0) {
-    // if (ip1 < 0 || ip2 < 0 || ip3 < 0) {
-    // if (ip1 < 0 || ip2 < 0) {
         bpf_printk("Failed to get ip\n");
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-
     nat_ip1 = bpf_map_lookup_elem(&external_map, &ip1);
     nat_ip2 = bpf_map_lookup_elem(&external_map, &ip2);
     nat_ip3 = bpf_map_lookup_elem(&external_map, &ip3);
     nat_ip4 = bpf_map_lookup_elem(&external_map, &ip4);
 
     if (!nat_ip1 || !nat_ip2 || !nat_ip3 || !nat_ip4) {
-    // if (!nat_ip1 || !nat_ip2 || !nat_ip3) {
-    // if (!nat_ip1 || !nat_ip2) {
         bpf_printk("Failed to get nat ip\n");
-
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-
     int ret1 = update_ipaddr(data, data_end, *nat_ip1);
     int ret2 = update_ipaddr(data + (lens[0] & 0x1FFF), data_end, *nat_ip2);
     int ret3 = update_ipaddr(data + (lens[0] +lens[1] & 0x1FFF), data_end, *nat_ip3);
     int ret4 = update_ipaddr(data + (lens[0] +lens[1] +lens[2] & 0x1FFF), data_end, *nat_ip4);
 
     if (ret1 || ret2 || ret3 || ret4) {
-    // if (ret1 || ret2 || ret3) {
-    // if (ret1 || ret2) {
         bpf_printk("Failed to update ip\n");
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-
     return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
 
 };

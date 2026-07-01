@@ -89,7 +89,7 @@ static FORCE_INLINE int parse_packet(void *data, void *data_end, struct packetHe
     case bpf_htons(ETH_P_ARP):
         goto ARP; // arp packet
     default:{
-        bpf_printk("L3 protocol: %d\n && bpf_htons(ETH_P_IP): %d", l3_proto, bpf_htons(ETH_P_IP));
+        //bpf_printk("L3 protocol: %d\n && bpf_htons(ETH_P_IP): %d", l3_proto, bpf_htons(ETH_P_IP));
         bpf_log_err("Unsupported L3 protocol\n");
         goto DROP;
         }   
