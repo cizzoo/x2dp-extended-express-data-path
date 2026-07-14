@@ -163,14 +163,31 @@ int bcms(struct xdp_md *ctx)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
     __u16 lentot = 0;
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
+    // Read the real per-packet lengths from the long batch header, which is
+    // [data_meta, data): a 2-byte bitmap + (batch_size-1) 2-byte lengths, so
+    // batch_size = (data - data_meta) / 2. Bounds-check once per size tier
+    // (batch 16/8/4) instead of once per length: a per-element check inside the
+    // loop forks verifier state on every packet and blows past the 1M insn
+    // limit in this (xxhash-heavy) program.
+    __u16 lens[16] = {0};
+    __u8 *m = (__u8 *)data_meta;
+    if (m + 32 <= data) {          // batch 16: 15 explicit lengths
+        #pragma unroll
+        for (int j = 0; j < 15; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
+    } else if (m + 16 <= data) {   // batch 8: 7 explicit lengths
+        #pragma unroll
+        for (int j = 0; j < 7; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
+    } else if (m + 8 <= data) {    // batch 4: 3 explicit lengths
+        #pragma unroll
+        for (int j = 0; j < 3; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
+    }
     __u32 zero = 0;
 
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-    for( int i = 0; i < 4; i++ ) {
+    for( int i = 0; i < 16; i++ ) {
         if(bpf_ntohs(md->valid) & (1 << i)) {
 
             struct pkt_5tuple pkt;
@@ -178,11 +195,16 @@ int bcms(struct xdp_md *ctx)
             int ret = handle_pkt(data + (lentot & 0x1FFF), data_end, &pkt);
             if (ret){
                 bpf_printk("handle_pkt failed at i %d\n", i);
+                bpf_printk("lentot %d\n", lentot);
+                bpf_printk("lens[0] %d\n", lens[0]);
+                bpf_printk("valid=%x\n", bpf_ntohs(md->valid));
                 return ret;
             }
             hash(&pkt, sizeof(pkt), pkt_hashes);
             countmin_add(cm, pkt_hashes);
-            lentot += lens[0]; //era lens[i] prova per 8 pacchetti batch
+            bpf_printk("packet %d\n", i);
+            // bpf_printk("pkt %d: src_ip=%pI4 dst_ip=%pI4 src_port=%d dst_port=%d proto=%d\n", i, &pkt.src_ip, &pkt.dst_ip, bpf_ntohs(pkt.src_port), bpf_ntohs(pkt.dst_port), pkt.proto);
+            lentot += lens[i]; // real per-packet length (variable batch header)
         }
     }
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);

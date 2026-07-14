@@ -204,34 +204,57 @@ int bnitro2(struct xdp_md *ctx)
     }
 
     __u16 lentot = 0;
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-    
+    // Read the real per-packet lengths from the long batch header, which is
+    // [data_meta, data): a 2-byte bitmap + (batch_size-1) 2-byte lengths, so
+    // batch_size = (data - data_meta) / 2. Bounds-check once per size tier
+    // (batch 16/8/4) instead of once per length: a per-element check inside the
+    // loop forks verifier state on every packet and blows past the 1M insn
+    // limit in this (xxhash-heavy) program.
+    __u16 lens[16] = {0};
+    __u8 *m = (__u8 *)data_meta;
+    if (m + 32 <= data) {          // batch 16: 15 explicit lengths
+        #pragma unroll
+        for (int j = 0; j < 15; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
+    } else if (m + 16 <= data) {   // batch 8: 7 explicit lengths
+        #pragma unroll
+        for (int j = 0; j < 7; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
+    } else if (m + 8 <= data) {    // batch 4: 3 explicit lengths
+        #pragma unroll
+        for (int j = 0; j < 3; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
+    }
+
     // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
     // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
 
-    __u32 zero = 0;
-    struct geosampling *geo = bpf_map_lookup_elem(&geosampling, &zero);
 
-    if (!geo){
-        bpf_printk("geo is null\n");
-        return XDP_DROP;
-    }
-
-    if(geo->count >HASHFN_N){
-        geo->count -= HASHFN_N ;
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
-    __u32 row_to_update = geo->count;
-    __u32 next_geo_value;
-
-    struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
-    if (!cm)
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
     // int samplerate = 4;
 
-    for( int i = 0; i < 4; i++ ) {
+    for( int i = 0; i < 16; i++ ) {
         if(bpf_ntohs(md->valid) & (1 << i)) {
+
+                __u32 zero = 0;
+
+
+
+            struct geosampling *geo = bpf_map_lookup_elem(&geosampling, &zero);
+
+            if (!geo){
+                bpf_printk("geo is null\n");
+                return XDP_DROP;
+            }
+
+            if(geo->count >HASHFN_N){
+                geo->count -= HASHFN_N ;
+                continue;
+                // return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+            }
+            __u32 row_to_update = geo->count;
+            __u32 next_geo_value;
+
+            struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
+            if (!cm)
+                return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
             struct pkt_5tuple pkt;
             __u16 pkt_hashes[4];            
@@ -244,11 +267,11 @@ int bnitro2(struct xdp_md *ctx)
             }
             hash(&pkt, sizeof(pkt), pkt_hashes);
             nitro_update(cm, pkt_hashes, geo, row_to_update, next_geo_value);
-                
-            lentot += lens[0];
+
+            lentot += lens[i];
         }
     }
-    
+
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 
