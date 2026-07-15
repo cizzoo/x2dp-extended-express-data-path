@@ -556,24 +556,12 @@ int bconntrack(struct xdp_md *ctx) {
 
     }
 
-    // Read the real per-packet lengths from the long batch header, which is
-    // [data_meta, data): a 2-byte bitmap + (batch_size-1) 2-byte lengths, so
-    // batch_size = (data - data_meta) / 2. Bounds-check once per size tier
-    // (batch 16/8/4) instead of once per length: a per-element check inside the
-    // loop forks verifier state on every packet and blows past the 1M insn
-    // limit in this (parsing-heavy) program.
-    __u16 lens[16] = {0};
+    // Per-packet lengths live in the long header at m + 2 + 2*i (network order),
+    // where m = data_meta and the header spans [data_meta, data). Each length is
+    // read inline in the loop below, bounds-checked against the header end, so
+    // any batch size works (4/6/8/12/16) and missing packets (past the header)
+    // count as length 0. Inline (not an array via tiers) keeps the verifier cheap.
     __u8 *m = (__u8 *)data_meta;
-    if (m + 32 <= data) {          // batch 16: 15 explicit lengths
-        #pragma unroll
-        for (int j = 0; j < 15; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
-    } else if (m + 16 <= data) {   // batch 8: 7 explicit lengths
-        #pragma unroll
-        for (int j = 0; j < 7; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
-    } else if (m + 8 <= data) {    // batch 4: 3 explicit lengths
-        #pragma unroll
-        for (int j = 0; j < 3; j++) lens[j] = bpf_ntohs(*(__u16 *)(m + 2 + (j << 1)));
-    }
     __u16 lentot = 0;
     //bpf_printk("ciao\n");
     for( int i = 0; i < 16; i++ ) {
@@ -596,7 +584,10 @@ int bconntrack(struct xdp_md *ctx) {
                 goto DROP;
             }
     
-            lentot += lens[i];
+            // advance by this packet's real length (0 if past the header)
+            __u8 *lp = m + 2 + (i << 1);
+            if (lp + 2 <= data)
+                lentot += bpf_ntohs(*(__u16 *)lp);
 
         }
     }
