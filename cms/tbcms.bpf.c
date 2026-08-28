@@ -14,6 +14,19 @@
  * limitations under the License.
  */
 
+/*
+ * tbcms — Count-Min Sketch, batched, forwarding path (t).
+ *
+ * NF:      CMS as in cms.bpf.c (4 rows x 1M counters), but keyed with
+ *          fasthash64 over the 5-tuple instead of xxhash64.
+ * Variant: batched, legacy fixed 4-slot header; loop over 4 slots gated by the
+ *          `valid` bitmap, advancing by lens[i].
+ * Opt:     none beyond batching; the debug bpf_printk()s are stripped.
+ * Verdict: packed nibbles, XDP_TX in every slot — the batch is sent back out
+ *          instead of dropped, so the measurement covers the TX path as well.
+ *          Error paths still return a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

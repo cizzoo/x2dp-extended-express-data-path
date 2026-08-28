@@ -6,6 +6,19 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * tbconntrack — stateful connection tracking, batched, forwarding path (t).
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c, with the state
+ *          machine in a FORCE_INLINE track() helper.
+ * Variant: batched, legacy fixed 4-slot header (BATCH_SIZE 4); loop gated by
+ *          the `valid` bitmap, cursor advanced by lens[i].
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles, XDP_TX in every slot — the tracked batch is sent
+ *          back out instead of dropped, so the measurement covers the TX path.
+ *          Error paths still return a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

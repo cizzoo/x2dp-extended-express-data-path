@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * bcounter — per-source-IP packet counting, batched.
+ *
+ * Microbenchmark: the cost of one hash-map read-modify-write per packet, with
+ * the packets delivered a batch at a time.
+ *
+ * NF:      same as counter.bpf.c — bump the counter keyed by ip->saddr in
+ *          `proto_count_map` (BPF_MAP_TYPE_HASH, 64k entries), inserting on
+ *          first sight.
+ * Variant: batched, legacy fixed 4-slot header; lens[] read from
+ *          `struct t_meta`, loop gated by the `valid` bitmap.
+ * Opt:     none beyond batching — parse and map update per packet, in a loop.
+ *          The straightforward form bpcounter is compared against.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

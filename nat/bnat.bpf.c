@@ -1,3 +1,17 @@
+/*
+ * bnat — source NAT, batched.
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched, legacy fixed 4-slot header; lens[] is read from
+ *          `struct t_meta` and the loop walks 4 slots gated by the `valid`
+ *          bitmap.
+ * Opt:     none beyond batching — get_ip(), lookup and update_ipaddr() per
+ *          packet, in a loop, exactly as the baseline does per invocation.
+ * Verdict: packed nibbles, XDP_DROP in every slot (this variant measures the
+ *          NAT work itself, not the TX path — see tbnat for that).
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

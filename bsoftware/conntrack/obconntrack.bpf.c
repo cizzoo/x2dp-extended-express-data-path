@@ -6,6 +6,26 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * obconntrack (bsoftware) — connection tracking, batched + unrolled, software
+ * batches.
+ *
+ * Software-batched copy of conntrack/obconntrack.bpf.c: packets sit at a fixed
+ * PAGE_SIZE (4096 B) stride, so packet i is at data + i*PAGE_SIZE and no real
+ * per-packet lengths are read. Use these when the FPGA bitstream is not
+ * available.
+ *
+ * NF:      the Polycube-derived conntrack of conntrack.bpf.c, with the TCP
+ *          state machine factored into a FORCE_INLINE track() helper.
+ * Variant: batched, PAGE_SIZE stride, 4 slots.
+ * Opt:     unrolling, applied only to the full-batch case: when `valid` is
+ *          0b1111 the four parse_packet() calls are issued back to back and
+ *          only then the four track() calls, so parsing is not serialised
+ *          behind the map-heavy state machine; any other bitmap falls back to
+ *          the single packet at the head of the frame.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

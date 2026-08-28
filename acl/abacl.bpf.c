@@ -1,3 +1,22 @@
+/*
+ * abacl — access control list, batched + AVX-512 rule comparison (ab).
+ *
+ * NF:      same rule table as acl.bpf.c — an array of struct pkt5 swept with
+ *          bpf_for_each_map_elem().
+ * Variant: batched, legacy fixed 4-slot header; the loop parses every valid
+ *          slot into a 4-entry pkts[] array.
+ * Opt:     one sweep per batch (as in bacl) plus SIMD matching. The batch's
+ *          four 5-tuples are loaded into a 512-bit register once, before the
+ *          sweep, with the load_mm512i() kfunc; then each rule visited by
+ *          apply_rule() is compared against all four packets in a single
+ *          cmp_512_128_simd() kfunc call instead of a scalar field-by-field
+ *          loop. The sweep still stops early once the batch is fully matched.
+ * Needs:   the ACL helper module loaded first —
+ *          `make -C acl/kernel_helpers load` (exports cmp_512_128_simd and
+ *          load_mm512i).
+ * Verdict: packed nibbles, XDP_DROP.
+ */
+
 #include "common.h"
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>

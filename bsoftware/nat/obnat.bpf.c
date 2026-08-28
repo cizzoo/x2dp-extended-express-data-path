@@ -1,3 +1,21 @@
+/*
+ * obnat (bsoftware) — source NAT, batched + unrolled, software batches.
+ *
+ * Software-batched copy of nat/obnat.bpf.c: packets sit at a fixed PAGE_SIZE
+ * (4096 B) stride, so packet i is at data + i*PAGE_SIZE and no real per-packet
+ * lengths are read. Use these when the FPGA bitstream is not available.
+ *
+ * NF:      source NAT — `external_map` lookup on ip->saddr, address rewrite,
+ *          IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched, PAGE_SIZE stride, 4 slots.
+ * Opt:     unrolling and phase separation, applied only to the full-batch case:
+ *          when `valid` is 0b1111 all four get_ip() calls run first, then all
+ *          four map lookups, then all four rewrites, so the independent hash
+ *          probes overlap; any other bitmap falls back to the single packet at
+ *          the head of the frame.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

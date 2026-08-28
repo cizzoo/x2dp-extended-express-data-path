@@ -14,6 +14,23 @@
  * limitations under the License.
  */
 
+/*
+ * aobnitro2 — NitroSketch flavour 2, batched, unrolled + AVX-512 hashing (aob).
+ *
+ * NF:      CMS, 4 rows x 1M counters keyed on the IPv4 5-tuple, updated one row
+ *          at a time through nitro_update() driven by the `geosampling` table
+ *          (see nitro2.bpf.c for the sampling scheme).
+ * Variant: batched, legacy fixed 4-slot header, fully unrolled — geo lookup,
+ *          countdown check and sketch lookup once per batch, then four
+ *          straight-line handle_pkt() calls into a 32-byte-aligned pkts[4].
+ * Opt:     unrolling plus one xxhash16x4() kfunc call (AVX-512) for the whole
+ *          batch instead of four scalar hashes. Apart from the program name
+ *          this file is currently identical to abnitro2.bpf.c — it is kept as
+ *          its own measurement point in the (function x variant) matrix.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include "fasthash.h"
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

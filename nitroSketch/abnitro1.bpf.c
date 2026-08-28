@@ -14,6 +14,23 @@
  * limitations under the License.
  */
 
+/*
+ * abnitro1 — NitroSketch flavour 1, batched + AVX-512 hashing (ab).
+ *
+ * NF:      CMS, 4 rows x 1M counters keyed on the IPv4 5-tuple, updated only
+ *          for sampled packets.
+ * Variant: batched, legacy fixed 4-slot header; the parse loop runs over all
+ *          four slots and fills a 32-byte-aligned pkts[4] array.
+ * Opt:     the whole batch is hashed in ONE xxhash16x4() kfunc call (four
+ *          xxhash64 digests in parallel under AVX-512) instead of four scalar
+ *          hashes, which is what splits the program into three phases: parse,
+ *          one hash, then apply. Sampling is also amortised — a single
+ *          bpf_get_prandom_u32() split into four bytes, one decision per slot
+ *          (samplerate=2, i.e. 1 in 4) — and the sketch lookup is hoisted out.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

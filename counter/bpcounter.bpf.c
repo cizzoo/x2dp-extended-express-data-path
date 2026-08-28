@@ -14,6 +14,27 @@
  * limitations under the License.
  */
 
+/*
+ * bpcounter — per-source-IP counting, batched, overlapped map lookups (p).
+ *
+ * Microbenchmark: isolates the prefetch effect of batching. Against bcounter,
+ * the only thing that changes is WHEN the map lookups happen.
+ *
+ * NF:      same as counter.bpf.c — bump the counter keyed by ip->saddr in
+ *          `proto_count_map` (BPF_MAP_TYPE_HASH, 16k entries here), inserting
+ *          on first sight.
+ * Variant: batched, legacy fixed 4-slot header, fully unrolled — no loop and no
+ *          `valid` test; handle_pkt() is a plain (non-inlined) function that
+ *          just returns each packet's source address.
+ * Opt:     the four source addresses are extracted first, then all four
+ *          bpf_map_lookup_elem() calls are issued back to back BEFORE any
+ *          result is used, and only afterwards are the four counters
+ *          incremented. The four independent hash probes are therefore in
+ *          flight together, so a miss on one overlaps the others instead of
+ *          stalling the packet that follows it.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

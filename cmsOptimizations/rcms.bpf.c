@@ -14,6 +14,19 @@
  * limitations under the License.
  */
 
+/*
+ * rcms (cmsOptimizations) — Count-Min Sketch, sampled, single-packet (r).
+ *
+ * NF:      CMS, 4 rows x 1M counters, keyed with fasthash64 over the 5-tuple.
+ * Variant: baseline — one XDP invocation per packet.
+ * Opt:     random sampling: one bpf_get_prandom_u32() per packet, and the
+ *          packet is only parsed, hashed and counted when the low `samplerate`
+ *          bits (3, i.e. 1 in 8) are zero. Everything else is skipped, so the
+ *          sketch trades accuracy for per-packet cost. Per-packet reference for
+ *          rbcms/robcms.
+ * Verdict: bare XDP_DROP, both for sampled-out and for counted packets.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

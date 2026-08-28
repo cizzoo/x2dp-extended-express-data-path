@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+/*
+ * obnitro1 — NitroSketch flavour 1, batched + optimised (ob).
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the 5-tuple, updated only
+ *          for sampled packets.
+ * Variant: batched, legacy fixed 4-slot header; lens[] read from
+ *          `struct t_meta`, loop gated by the `valid` bitmap.
+ * Opt:     two things move out of the per-packet path. A single
+ *          bpf_get_prandom_u32() is split into four bytes randoms[0..3], one
+ *          sampling decision per slot, instead of one helper call per packet;
+ *          and the sketch lookup is hoisted above the loop (one per batch)
+ *          instead of being repeated inside it as bnitro1 does.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

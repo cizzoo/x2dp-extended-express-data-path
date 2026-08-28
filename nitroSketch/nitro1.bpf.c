@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+/*
+ * nitro1 — NitroSketch flavour 1 (uniform sampling), single-packet baseline.
+ *
+ * NF:      Count-Min Sketch, 4 rows x 1M counters, xxhash64 over the IPv4
+ *          5-tuple. NitroSketch's idea is to update the sketch only for a
+ *          sampled fraction of the traffic; flavour 1 approximates that with
+ *          plain uniform sampling.
+ * Variant: baseline — one XDP invocation per packet.
+ * Opt:     one bpf_get_prandom_u32() per packet; the packet is parsed, hashed
+ *          and added to all 4 rows only when the low samplerate=4 bits are zero
+ *          (1 in 16). Everything else returns immediately. Compare with nitro2,
+ *          which uses NitroSketch's geometric per-row sampling instead.
+ * Verdict: bare XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

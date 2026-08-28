@@ -14,6 +14,19 @@
  * limitations under the License.
  */
 
+/*
+ * obcms (cmsOptimizations) — Count-Min Sketch, batched + unrolled (o).
+ *
+ * NF:      CMS, 4 rows x 1M counters, keyed with fasthash64 over the 5-tuple
+ *          (the cheaper hash this directory uses in place of xxhash64).
+ * Variant: batched, legacy fixed 4-slot header; offsets are arithmetic on the
+ *          lens[] read from `struct t_meta`.
+ * Opt:     isolates unrolling. No loop and no `valid` test — four straight-line
+ *          handle_pkt() calls, then four hashes, then four countmin_add()s, so
+ *          work belonging to different packets can overlap.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

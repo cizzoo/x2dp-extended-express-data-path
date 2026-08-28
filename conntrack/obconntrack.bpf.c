@@ -6,6 +6,20 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * obconntrack — stateful connection tracking, batched + unrolled (ob).
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c, with the state
+ *          machine factored into the FORCE_INLINE track() helper.
+ * Variant: batched, legacy fixed 4-slot header; packet offsets are arithmetic
+ *          on the lens[] read from `struct t_meta`.
+ * Opt:     fully unrolled and branch-free. No loop and no `valid` test: the
+ *          four parse_packet() calls are issued back to back and only then the
+ *          four track() calls, so parsing of later packets is not serialised
+ *          behind the map-heavy state machine of the earlier ones.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

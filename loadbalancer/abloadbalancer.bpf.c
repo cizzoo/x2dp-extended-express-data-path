@@ -1,6 +1,27 @@
 // SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 // Copyright (c) 2018 Netronome Systems, Inc.
 
+/*
+ * abloadbalancer — L4 load balancer, batched, unrolled + SIMD hashing (ab).
+ *
+ * NF:      same as loadbalancer.bpf.c — a hash of the 5-tuple modulo
+ *          MAX_SERVERS (512) selects a backend from the `servers` array, then
+ *          the Ethernet header is rewritten towards it.
+ * Variant: batched, legacy fixed 4-slot header, fully unrolled — no loop and
+ *          no `valid` test: four straight-line handle_pkt() calls into a
+ *          32-byte-aligned pkts[4], then four backend selections, then four
+ *          update_eth() rewrites, so each phase of the batch runs together.
+ * Opt:     this file carries both hashing paths. The active one is
+ *          singlehash(), a scalar xxhash64 per packet with a different seed
+ *          each (77/91/93/61) so the four packets spread across backends; the
+ *          batched hash() above it feeds all four 5-tuples to the xxhash16x4()
+ *          kfunc in one AVX-512 call and is left in place for the SIMD
+ *          comparison.
+ * Needs:   the xxhash kernel module loaded first when the kfunc path is used —
+ *          `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include "common.h"
 #include "fasthash.h"
 #include "xxhash64.h"

@@ -1,3 +1,19 @@
+/*
+ * bnat (bsoftware) — source NAT, batched, software-assembled batches.
+ *
+ * Software-batched copy of nat/bnat.bpf.c: the batch is built in software
+ * rather than by the FPGA NIC, so the packets sit at a fixed PAGE_SIZE (4096 B)
+ * stride and packet i is at data + i*PAGE_SIZE. No real per-packet lengths are
+ * read — the metadata header is used only for its `valid` bitmap. Use these
+ * when the FPGA bitstream is not available.
+ *
+ * NF:      source NAT — `external_map` lookup on ip->saddr, address rewrite,
+ *          IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched, PAGE_SIZE stride, 4 slots gated by the `valid` bitmap.
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

@@ -14,6 +14,19 @@
  * limitations under the License.
  */
 
+/*
+ * bcms (cmsOptimizations) — Count-Min Sketch, batched.
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the IPv4 5-tuple.
+ * Variant: batched, legacy fixed 4-slot header — lens[] is read from
+ *          `struct t_meta` up front and the loop walks 4 slots gated by the
+ *          `valid` bitmap, advancing the cursor by lens[i].
+ * Opt:     none beyond batching; the map lookup is hoisted out of the loop (one
+ *          per batch). This is the batched reference the other files in this
+ *          directory each add a single optimisation to (o / so / u / r).
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

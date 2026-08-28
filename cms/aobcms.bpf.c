@@ -13,6 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * aobcms — Count-Min Sketch, batched, unrolled + AVX-512 hashing (aob).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters keyed on the IPv4
+ *          5-tuple.
+ * Variant: batched, legacy fixed 4-slot header, fully unrolled: no loop and no
+ *          `valid` test, the four parses are straight-line at offsets computed
+ *          from lens[].
+ * Opt:     abcms's AVX-512 hashing (one xxhash16x4() kfunc call for the whole
+ *          batch) combined with obcms's unrolling, so neither the parse phase
+ *          nor the hash phase contains a branch. The four countmin_add() calls
+ *          then consume the 4x4 row indices the kfunc produced.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 
 #include <bpf/bpf_endian.h>

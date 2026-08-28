@@ -1,6 +1,20 @@
 // SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 // Copyright (c) 2018 Netronome Systems, Inc.
 
+/*
+ * loadbalancer — hash-based L4 load balancer, single-packet baseline.
+ *
+ * NF:      parses the IPv4 5-tuple, hashes it with xxhash64 and takes the
+ *          result modulo MAX_SERVERS (512) to pick a backend from the
+ *          `servers` array (loaded from 512dest.csv), then rewrites the
+ *          Ethernet header towards that backend's MAC. Slot 0 is the fallback
+ *          when the chosen entry is missing.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_DROP — the rewrite is performed but the packet is not
+ *          transmitted, so the measurement is of the balancing work.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

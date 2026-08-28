@@ -1,3 +1,16 @@
+/*
+ * brouter — IPv4 LPM lookup, batched.
+ *
+ * NF:      same LPM trie lookup as router.bpf.c (1M entries, key built with
+ *          prefixlen=32 from the source address); handle_pkt() builds the key
+ *          per packet.
+ * Variant: batched, legacy fixed 4-slot header; lens[] is read from
+ *          `struct t_meta` and the loop walks 4 slots gated by the `valid`
+ *          bitmap.
+ * Opt:     none beyond batching — one trie lookup per packet, in a loop.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

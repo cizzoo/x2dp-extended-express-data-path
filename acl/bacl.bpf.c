@@ -1,3 +1,20 @@
+/*
+ * bacl — access control list, batched.
+ *
+ * NF:      same rule table as acl.bpf.c — an array of struct pkt5 swept with
+ *          bpf_for_each_map_elem().
+ * Variant: batched, legacy fixed 4-slot header; the loop parses every valid
+ *          slot into a pkts[4] array carried inside the callback context.
+ * Opt:     the point of the variant — the rule table is swept ONCE for the
+ *          whole batch instead of once per packet. apply_rule() checks the rule
+ *          it was handed against all four 5-tuples in the context, accumulating
+ *          one nibble of the packed verdict per packet and decrementing
+ *          batch_size so the sweep can stop early once every packet has
+ *          matched. That turns N sweeps of a 100k-entry table into one.
+ * Verdict: packed nibbles — the accumulated per-packet verdict on a match,
+ *          otherwise packed XDP_DROP.
+ */
+
 #include "common.h"
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>

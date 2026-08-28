@@ -14,6 +14,19 @@
  * limitations under the License.
  */
 
+/*
+ * sobcms (cmsOptimizations) — batched, unrolled + split map access (so).
+ *
+ * NF:      CMS, 4 rows x 1M counters, keyed with fasthash64 over the 5-tuple.
+ * Variant: batched, legacy fixed 4-slot header, fully unrolled like obcms.
+ * Opt:     isolates splitting the counter update. countmin_load() reads a
+ *          packet's four counters and countmin_store() increments and writes
+ *          them back; all four loads of the batch are issued before any store,
+ *          so the cache-missing loads overlap instead of each one stalling its
+ *          own read-modify-write.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

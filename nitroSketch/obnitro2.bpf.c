@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+/*
+ * obnitro2 — NitroSketch flavour 2, batched + unrolled (ob).
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the 5-tuple, updated one
+ *          row at a time through nitro_update() driven by the `geosampling`
+ *          table (see nitro2.bpf.c).
+ * Variant: batched, legacy fixed 4-slot header; offsets are arithmetic on the
+ *          lens[] read from `struct t_meta`.
+ * Opt:     fully unrolled and hoisted. No loop and no `valid` test: the geo and
+ *          sketch lookups plus the countdown check happen once for the whole
+ *          batch, then four straight-line handle_pkt() calls, four hashes and
+ *          four nitro_update()s. bnitro2 does all of that per packet.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * bnitro1 — NitroSketch flavour 1 (uniform sampling), batched.
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the 5-tuple, updated only
+ *          for sampled packets.
+ * Variant: batched — one XDP invocation per batch; walks up to 16 slots gated
+ *          by the `valid` bitmap and reads each packet's length inline from
+ *          data_meta + 2 + 2*i, so one binary serves any batch size (4..16).
+ * Opt:     batching only; the sampling is still the straightforward per-packet
+ *          form — one bpf_get_prandom_u32() per valid slot, sketch updated when
+ *          the low samplerate=4 bits are zero (1 in 16). The sketch lookup also
+ *          sits inside the loop. Note the cursor advances for every valid slot,
+ *          sampled or not, so the walk stays correct.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

@@ -1,3 +1,18 @@
+/*
+ * bswaptx — MAC swap then transmit, batched.
+ *
+ * Microbenchmark: the batched counterpart of swaptx.bpf.c — the minimal
+ * realistic forwarder, rewriting every packet of a batch and sending the batch
+ * back out after one XDP call.
+ *
+ * NF:      swaps the Ethernet source and destination MAC addresses of each
+ *          packet in place.
+ * Variant: batched, legacy fixed 4-slot header; lens[] read from
+ *          `struct t_meta`, loop gated by the `valid` bitmap.
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles, XDP_TX in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

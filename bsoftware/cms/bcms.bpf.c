@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * bcms (bsoftware) — Count-Min Sketch, batched, software-assembled batches.
+ *
+ * Software-batched copy of cms/bcms.bpf.c: the batch is built in software
+ * rather than by the FPGA NIC, so the packets sit at a fixed PAGE_SIZE (4096 B)
+ * stride and packet i is simply at data + i*PAGE_SIZE. No real per-packet
+ * lengths are read — the metadata header is used only for its `valid` bitmap —
+ * and the loop is fixed at 4 slots. Use these when the FPGA bitstream is not
+ * available.
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the IPv4 5-tuple.
+ * Variant: batched, PAGE_SIZE stride, 4 slots gated by the `valid` bitmap.
+ * Opt:     none beyond batching; the sketch lookup is hoisted out of the loop.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

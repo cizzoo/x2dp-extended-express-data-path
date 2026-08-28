@@ -6,6 +6,18 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * tconntrack — stateful connection tracking, single-packet, forwarding path (t).
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c — tracking logic
+ *          inline in the program body.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_TX — every exit, including the parse/track failure paths,
+ *          forwards rather than drops. The per-packet reference for
+ *          tbconntrack.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

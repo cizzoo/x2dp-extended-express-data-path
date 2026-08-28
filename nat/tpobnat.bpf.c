@@ -1,3 +1,20 @@
+/*
+ * tpobnat — source NAT, batched, unrolled, early-deref, forwarding path (tpob).
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched, legacy fixed 4-slot header; offsets are arithmetic on the
+ *          lens[] read from `struct t_meta`.
+ * Opt:     tobnat plus one step. The four map values are dereferenced into
+ *          plain locals as soon as all four pointers are known, and only then
+ *          are the four update_ipaddr() calls made with those values — so the
+ *          loads of the map entries are issued together, ahead of the
+ *          rewrite/checksum work, instead of each one being pulled in at the
+ *          point of use.
+ * Verdict: packed nibbles, XDP_TX in every slot. Error paths still return a
+ *          packed XDP_DROP.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

@@ -1,3 +1,17 @@
+/*
+ * sampler — sampled per-source-IP counting, single-packet baseline.
+ *
+ * NF:      for the packets it keeps, reads the IPv4 source address and bumps
+ *          its counter in the `ips` hash map (1M entries), inserting the entry
+ *          on first sight.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     random sampling: one bpf_get_prandom_u32() per packet, and the
+ *          packet is only parsed and counted when the low samplerate=3 bits are
+ *          zero (1 in 8). The draw happens before anything touches the packet,
+ *          so a sampled-out packet costs one helper call and a test.
+ * Verdict: bare XDP_DROP, for kept and skipped packets alike.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

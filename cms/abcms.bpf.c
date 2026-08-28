@@ -13,6 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * abcms — Count-Min Sketch, batched + AVX-512 hashing (ab).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters keyed on the IPv4
+ *          5-tuple.
+ * Variant: batched, legacy fixed 4-slot header; the loop tests the `valid`
+ *          bitmap and parses each packet's 5-tuple into a 32-byte-aligned
+ *          pkts[4] array.
+ * Opt:     the whole batch is hashed in ONE call to the xxhash16x4() kfunc,
+ *          which computes four xxhash64 digests in parallel with AVX-512,
+ *          instead of four scalar xxhash64 calls. Hashing thus leaves the parse
+ *          loop entirely: the loop only fills pkts[], then one hash() call
+ *          produces all 4x4 row indices for countmin_add(). The alignment of
+ *          pkts[] matters for the SIMD load; the cms/Makefile's -DALGN= knob
+ *          (default 64) is declared here for that experiment.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 
 #include <bpf/bpf_endian.h>

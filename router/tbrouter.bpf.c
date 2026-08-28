@@ -1,3 +1,18 @@
+/*
+ * tbrouter — IPv4 LPM lookup, batched, forwarding path (t).
+ *
+ * NF:      same LPM trie lookup as router.bpf.c (1M entries, key built with
+ *          prefixlen=32 from the source address).
+ * Variant: batched — one XDP invocation per batch; walks up to 16 slots gated
+ *          by the `valid` bitmap and reads each packet's length inline from
+ *          data_meta + 2 + 2*i, so one binary serves any batch size (4..16).
+ *          The current-style walk, unlike brouter's fixed 4-slot loop.
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles, XDP_TX in every slot — the looked-up batch is sent
+ *          back out, so the measurement covers the TX path. Error paths still
+ *          return a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

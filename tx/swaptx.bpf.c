@@ -1,3 +1,17 @@
+/*
+ * swaptx — MAC swap then transmit, single-packet.
+ *
+ * Microbenchmark: the minimal realistic forwarder — rewrite the frame, send it
+ * back out. Against tx.bpf.c it adds the packet write; against
+ * drop/swap.bpf.c it adds the TX path.
+ *
+ * NF:      swaps the Ethernet source and destination MAC addresses in place.
+ * Variant: baseline — one XDP invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_TX (bare XDP_PASS if the frame is too short to hold an
+ *          Ethernet header).
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

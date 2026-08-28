@@ -1,3 +1,16 @@
+/*
+ * counter — per-source-IP packet counting, single-packet baseline.
+ *
+ * Microbenchmark: the cost of one hash-map read-modify-write per packet.
+ *
+ * NF:      parses Ethernet + IPv4 and bumps the counter keyed by ip->saddr in
+ *          `proto_count_map` (BPF_MAP_TYPE_HASH, 64k entries), inserting the
+ *          entry on first sight. Uses __sync_fetch_and_add() on the value.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

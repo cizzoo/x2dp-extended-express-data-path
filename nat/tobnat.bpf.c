@@ -1,3 +1,17 @@
+/*
+ * tobnat — source NAT, batched, unrolled, forwarding path (tob).
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched, legacy fixed 4-slot header; offsets are arithmetic on the
+ *          lens[] read from `struct t_meta`.
+ * Opt:     obnat's unrolling — no loop, no `valid` test, and the batch runs in
+ *          phases (four get_ip(), four map lookups, four update_ipaddr()) so
+ *          the independent hash probes overlap.
+ * Verdict: packed nibbles, XDP_TX in every slot — the unrolled counterpart of
+ *          tbnat. Error paths still return a packed XDP_DROP.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

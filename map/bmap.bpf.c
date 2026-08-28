@@ -1,3 +1,22 @@
+/*
+ * bmap — cost of map lookups inside a batch.
+ *
+ * Microbenchmark: two array-map lookups and two packet reads per invocation,
+ * with no network function on top, so what is measured is the map access plus
+ * the bounds checks the verifier forces on a metadata-supplied offset.
+ *
+ * NF:      none. Reads the Ethernet h_proto of the packet at the start of the
+ *          frame and of the one at `offset` bytes into it, storing each into
+ *          its own slot of a 2-entry BPF_MAP_TYPE_ARRAY.
+ * Variant: batched with a minimal 2-byte metadata header — `struct t_meta` here
+ *          holds only the offset of the second packet, not the valid/len
+ *          layout the network functions use.
+ * Opt:     none; the offset is masked (& 0xFF) purely to give the verifier a
+ *          bounded value.
+ * Verdict: packed nibbles for a 2-packet batch — XDP_DROP in slot 0, XDP_PASS
+ *          in slot 1.
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <bpf/bpf_helpers.h>

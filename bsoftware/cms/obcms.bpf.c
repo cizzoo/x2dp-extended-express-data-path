@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * obcms (bsoftware) — CMS, batched + unrolled, software-assembled batches.
+ *
+ * Software-batched copy of cms/obcms.bpf.c: packets sit at a fixed PAGE_SIZE
+ * (4096 B) stride, so packet i is at data + i*PAGE_SIZE and no real per-packet
+ * lengths are read. Use these when the FPGA bitstream is not available.
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the IPv4 5-tuple.
+ * Variant: batched, PAGE_SIZE stride, 4 slots.
+ * Opt:     unrolling, applied only to the full-batch case: when `valid` is
+ *          0b1111 the four packets are parsed, hashed and counted straight-line
+ *          with no loop and no per-slot test; any other bitmap falls back to
+ *          handling the single packet at the head of the frame.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

@@ -14,6 +14,20 @@
  * limitations under the License.
  */
 
+/*
+ * ubcms (cmsOptimizations) — Count-Min Sketch, batched, per-packet map access.
+ *
+ * NF:      CMS, 4 rows x 1M counters, keyed with fasthash64 over the 5-tuple.
+ * Variant: batched, legacy fixed 4-slot header; 4-slot loop gated by the
+ *          `valid` bitmap, advancing by lens[i].
+ * Opt:     isolates the cost of the sketch map lookup. Unlike bcms, which looks
+ *          the sketch up once per batch, this variant does one
+ *          bpf_map_lookup_elem() per packet inside the loop — the hoisted
+ *          version is left commented out above it for reference. Measures what
+ *          amortising the lookup across a batch is actually worth.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

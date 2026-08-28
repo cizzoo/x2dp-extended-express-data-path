@@ -14,6 +14,17 @@
  * limitations under the License.
  */
 
+/*
+ * cms (cmsOptimizations) — Count-Min Sketch, single-packet baseline.
+ *
+ * NF:      Count-Min Sketch over the IPv4 5-tuple, 4 rows x 1M counters in one
+ *          BPF_MAP_TYPE_ARRAY entry, keyed with xxhash64.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none. This directory isolates one optimisation at a time on top of
+ *          bcms.bpf.c; this file is the zero point for those comparisons.
+ * Verdict: bare XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

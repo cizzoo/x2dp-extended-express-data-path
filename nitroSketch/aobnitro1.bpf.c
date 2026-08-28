@@ -14,6 +14,23 @@
  * limitations under the License.
  */
 
+/*
+ * aobnitro1 — NitroSketch flavour 1, batched, unrolled + AVX-512 hashing (aob).
+ *
+ * NF:      CMS, 4 rows x 1M counters keyed on the IPv4 5-tuple, updated only
+ *          for sampled packets.
+ * Variant: batched, legacy fixed 4-slot header, fully unrolled — no loop and no
+ *          `valid` test, four straight-line handle_pkt() calls at offsets
+ *          computed from lens[].
+ * Opt:     abnitro1's AVX-512 hashing (one xxhash16x4() call for the whole
+ *          batch, into a 32-byte-aligned pkts[4]) combined with unrolling, so
+ *          the parse, hash and apply phases are all branch-free apart from the
+ *          per-slot sampling test. The single bpf_get_prandom_u32() split into
+ *          four bytes and the hoisted sketch lookup are kept from abnitro1.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include "fasthash.h"
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

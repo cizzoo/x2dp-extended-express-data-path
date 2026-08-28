@@ -1,3 +1,21 @@
+/*
+ * acl — access control list, single-packet baseline.
+ *
+ * NF:      the packet's 5-tuple is compared against a rule table held in a
+ *          BPF_MAP_TYPE_ARRAY of struct pkt5 (MAX_ENTRIES, loaded from the
+ *          *_rules.txt files; the evaluation sweeps 10 to 100k rules). The
+ *          sweep itself is a bpf_for_each_map_elem() over the whole table with
+ *          apply_rule() as the callback, which sets the verdict to XDP_DROP on
+ *          an exact field-by-field match.
+ * Variant: baseline — standard XDP, one invocation per packet, one full table
+ *          sweep per packet.
+ * Opt:     none — the callback compares fields directly, and the alternative
+ *          hash/memcmp forms of the comparison are left commented out beside
+ *          it. The static dropped/passed/map_calls/pkt_cnt counters are debug
+ *          instrumentation.
+ * Verdict: bare XDP_DROP on a rule match, bare XDP_TX otherwise.
+ */
+
 #include "common.h"
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>

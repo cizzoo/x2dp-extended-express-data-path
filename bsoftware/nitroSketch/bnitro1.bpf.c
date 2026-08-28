@@ -14,6 +14,26 @@
  * limitations under the License.
  */
 
+/*
+ * bnitro1 (bsoftware) — NitroSketch flavour 1, batched, software batches.
+ *
+ * Software-batched copy of nitroSketch/bnitro1.bpf.c: the batch is built in
+ * software rather than by the FPGA NIC, so the packets sit at a fixed PAGE_SIZE
+ * (4096 B) stride and packet i is at data + i*PAGE_SIZE. No real per-packet
+ * lengths are read — the metadata header is used only for its `valid` bitmap —
+ * and the loop is fixed at 4 slots. Use these when the FPGA bitstream is not
+ * available.
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the 5-tuple, updated only
+ *          for sampled packets.
+ * Variant: batched, PAGE_SIZE stride, 4 slots gated by the `valid` bitmap.
+ * Opt:     batching only; the sampling is the straightforward per-packet form —
+ *          one bpf_get_prandom_u32() per valid slot, sketch updated when the
+ *          low samplerate=2 bits are zero (1 in 4). The sketch lookup is
+ *          hoisted out of the loop.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

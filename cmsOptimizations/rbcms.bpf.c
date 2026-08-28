@@ -14,6 +14,20 @@
  * limitations under the License.
  */
 
+/*
+ * rbcms (cmsOptimizations) — Count-Min Sketch, batched + sampled (rb).
+ *
+ * NF:      CMS, 4 rows x 1M counters, keyed with fasthash64 over the 5-tuple.
+ * Variant: batched, legacy fixed 4-slot header; 4-slot loop gated by the
+ *          `valid` bitmap, cursor advanced by lens[i] whether or not the slot
+ *          was sampled.
+ * Opt:     random sampling inside the batch, the straightforward way: one
+ *          bpf_get_prandom_u32() call per valid slot, and the packet is parsed,
+ *          hashed and counted only when the low `samplerate` bits (3, i.e. 1 in
+ *          8) are zero. Compare with robcms, which draws once per batch.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

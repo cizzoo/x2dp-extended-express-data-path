@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+/*
+ * ubcms — Count-Min Sketch, batched, unconditional 4-slot loop (u).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters, xxhash64 over the
+ *          IPv4 5-tuple.
+ * Variant: batched, legacy fixed 4-slot header; lens[] is read from
+ *          `struct t_meta` before the loop.
+ * Opt:     the `valid` bitmap test is dropped — all four slots are processed
+ *          unconditionally, one branch per slot less and a straight-line loop
+ *          body the verifier can unroll cleanly. The cursor advances by the
+ *          precomputed lens[i] instead of an inline header read, and the map
+ *          lookup stays hoisted out of the loop (one per batch).
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

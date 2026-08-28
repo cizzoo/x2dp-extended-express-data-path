@@ -6,6 +6,22 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * conntrack — stateful connection tracking, single-packet baseline.
+ *
+ * NF:      Polycube-derived conntrack. parse_packet() extracts the 5-tuple and
+ *          TCP flags, the session key is normalised so both directions hash to
+ *          the same entry, and the connection map is walked through the TCP
+ *          state machine (SYN_SENT / SYN_RECV / ESTABLISHED / FIN_WAIT /
+ *          LAST_ACK), refreshing the entry's ttl from bpf_ktime_get_ns(). UDP
+ *          and ICMP get their own simpler paths; unknown flows are inserted.
+ *          Maps and helpers live in conntrack_{structs,maps,parser,bpf_log}.h.
+ * Variant: baseline — standard XDP, one invocation per packet, the tracking
+ *          logic inline in the program body.
+ * Opt:     none.
+ * Verdict: bare XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

@@ -1,3 +1,20 @@
+/*
+ * brouter (bsoftware) — IPv4 LPM lookup, batched, software-assembled batches.
+ *
+ * Software-batched copy of router/brouter.bpf.c: the batch is built in software
+ * rather than by the FPGA NIC, so the packets sit at a fixed PAGE_SIZE (4096 B)
+ * stride and packet i is at data + i*PAGE_SIZE. No real per-packet lengths are
+ * read — the metadata header is used only for its `valid` bitmap. Use these
+ * when the FPGA bitstream is not available.
+ *
+ * NF:      one lookup per packet of the source address in an LPM trie (1M
+ *          entries, key built with prefixlen=32); the result is only looked at,
+ *          not acted on.
+ * Variant: batched, PAGE_SIZE stride, 4 slots gated by the `valid` bitmap.
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

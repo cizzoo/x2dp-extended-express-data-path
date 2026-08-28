@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * abnitro2 — NitroSketch flavour 2, batched + AVX-512 hashing (ab).
+ *
+ * NF:      CMS, 4 rows x 1M counters keyed on the IPv4 5-tuple, updated one row
+ *          at a time through nitro_update() driven by the `geosampling` table
+ *          (see nitro2.bpf.c for the sampling scheme).
+ * Variant: batched, legacy fixed 4-slot header, straight-line: the geo and
+ *          sketch lookups and the countdown check happen once for the batch,
+ *          then four handle_pkt() calls into a 32-byte-aligned pkts[4].
+ * Opt:     the four 5-tuples are hashed in ONE xxhash16x4() kfunc call
+ *          (AVX-512, four xxhash64 digests in parallel) instead of four scalar
+ *          hashes; the four nitro_update()s then consume the 4x4 row indices.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include "fasthash.h"
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

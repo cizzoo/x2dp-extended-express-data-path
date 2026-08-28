@@ -1,3 +1,20 @@
+/*
+ * obsampler — sampled per-source-IP counting, batched + optimised (ob).
+ *
+ * NF:      same as sampler.bpf.c — for the slots it keeps, reads the IPv4
+ *          source address and bumps its counter in the `ips` hash map (1M
+ *          entries), inserting on first sight.
+ * Variant: batched, legacy fixed 4-slot header; lens[] read from
+ *          `struct t_meta`, loop gated by the `valid` bitmap, cursor advanced
+ *          whether or not the slot was sampled.
+ * Opt:     amortises the randomness over the batch: a single
+ *          bpf_get_prandom_u32() is split into four bytes randoms[0..3], one
+ *          sampling decision per slot (low samplerate=3 bits zero, 1 in 8),
+ *          instead of one helper call per packet. The per-slot call is left
+ *          commented out beside it for the comparison.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

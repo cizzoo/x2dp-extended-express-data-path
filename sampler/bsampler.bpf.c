@@ -1,3 +1,20 @@
+/*
+ * bsampler — batch sampling microbenchmark.
+ *
+ * NF:      none of the packet work — this variant isolates the sampling step
+ *          itself. It walks the batch, draws a fresh bpf_get_prandom_u32() for
+ *          every valid slot and builds the `valids` bitmask of the slots the
+ *          draw kept, then classifies the resulting mask into the `buoni` /
+ *          `cattivi` / `tot` counters. What it measures is how the per-slot
+ *          decisions of a batch are distributed, i.e. how often a batch ends up
+ *          with a scattered rather than a contiguous set of survivors.
+ * Variant: batched, legacy fixed 4-slot header; lens[] read from
+ *          `struct t_meta`, loop gated by the `valid` bitmap.
+ * Opt:     none — the deliberately naive form, one helper call per slot, to be
+ *          compared against obsampler's single draw per batch.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * bnitro2 — NitroSketch flavour 2 (geometric sampling), batched.
+ *
+ * NF:      CMS, 4 rows x 1M counters, xxhash64 over the 5-tuple, updated one
+ *          row at a time through nitro_update() driven by the `geosampling`
+ *          table (see nitro2.bpf.c for the sampling scheme).
+ * Variant: batched — one XDP invocation per batch; walks up to 16 slots gated
+ *          by the `valid` bitmap, reading each packet's length inline from
+ *          data_meta + 2 + 2*i, so one binary serves any batch size (4..16).
+ * Opt:     batching only. The geosampling and sketch lookups both stay inside
+ *          the loop and the countdown is consumed per packet, exactly as in the
+ *          single-packet version; a slot whose countdown has not expired is
+ *          `continue`d over, with the cursor still advanced.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

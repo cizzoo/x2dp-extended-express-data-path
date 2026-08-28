@@ -1,3 +1,18 @@
+/*
+ * obnat — source NAT, batched + unrolled (ob).
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched, legacy fixed 4-slot header; packet offsets are arithmetic
+ *          on the lens[] read from `struct t_meta`.
+ * Opt:     fully unrolled and phase-separated. No loop and no `valid` test: all
+ *          four get_ip() calls first, then all four bpf_map_lookup_elem()s,
+ *          then all four update_ipaddr()s. Grouping the lookups means the four
+ *          (independent, likely cache-missing) hash probes are in flight
+ *          together instead of one per packet-sized iteration.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

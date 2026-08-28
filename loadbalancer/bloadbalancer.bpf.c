@@ -1,6 +1,20 @@
 // SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 // Copyright (c) 2018 Netronome Systems, Inc.
 
+/*
+ * bloadbalancer — hash-based L4 load balancer, batched.
+ *
+ * NF:      same as loadbalancer.bpf.c — xxhash64 over the 5-tuple modulo
+ *          MAX_SERVERS (512) selects a backend from the `servers` array, then
+ *          the Ethernet header is rewritten towards it.
+ * Variant: batched, legacy fixed 4-slot header; lens[] is read from
+ *          `struct t_meta` and the loop walks 4 slots gated by the `valid`
+ *          bitmap.
+ * Opt:     none beyond batching — parse, hash, backend lookup and MAC rewrite
+ *          per packet, in a loop.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include "common.h"
 #include "xxhash64.h"
 #include "jhash.h"

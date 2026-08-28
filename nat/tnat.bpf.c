@@ -1,3 +1,17 @@
+/*
+ * tnat — source NAT, single-packet, forwarding-biased (t).
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none; the difference against nat.bpf.c is on the exits — a packet
+ *          with no mapping is forwarded rather than dropped, so a miss costs
+ *          the same TX path as a hit. The per-packet reference for the batched
+ *          TX NAT variants.
+ * Verdict: bare XDP_TX on a hit and on a lookup miss; bare XDP_DROP only when
+ *          the packet is malformed or the rewrite fails.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

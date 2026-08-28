@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * robcms (cmsOptimizations) — batched + sampled, one draw per batch (rob).
+ *
+ * NF:      CMS, 4 rows x 1M counters, keyed with fasthash64 over the 5-tuple.
+ * Variant: batched, legacy fixed 4-slot header; 4-slot loop gated by the
+ *          `valid` bitmap, cursor advanced by lens[i] whether or not the slot
+ *          was sampled.
+ * Opt:     amortises the randomness over the batch: a single
+ *          bpf_get_prandom_u32() is split into four bytes randoms[0..3], one
+ *          per slot, instead of rbcms's one helper call per packet. The
+ *          sampling decision itself is unchanged (low `samplerate`=3 bits zero,
+ *          1 in 8), so the difference against rbcms is purely the cost of the
+ *          helper calls.
+ * Verdict: packed nibbles, XDP_DROP in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

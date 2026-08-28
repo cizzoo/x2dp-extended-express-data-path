@@ -14,6 +14,17 @@
  * limitations under the License.
  */
 
+/*
+ * tcms — Count-Min Sketch, single-packet, forwarding path (t).
+ *
+ * NF:      CMS as in cms.bpf.c (4 rows x 1M counters), keyed with fasthash64
+ *          over the 5-tuple.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_TX — the per-packet reference for tbcms, so the batched
+ *          forwarding numbers have a single-packet counterpart.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

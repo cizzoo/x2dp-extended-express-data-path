@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:dl.acm.org)",
+      "WebSearch",
+      "WebFetch(domain:unpaywall.org)"
+    ]
+  }
+}

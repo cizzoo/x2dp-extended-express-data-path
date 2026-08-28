@@ -1,3 +1,18 @@
+/*
+ * tbnat — source NAT, batched, forwarding path (t).
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched — one XDP invocation per batch; walks up to 16 slots gated
+ *          by the `valid` bitmap and reads each packet's length inline from
+ *          data_meta + 2 + 2*i, so one binary serves any batch size (4..16).
+ *          The current-style walk, unlike bnat's fixed 4-slot loop.
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles, XDP_TX in every slot — the translated batch is sent
+ *          back out, so the measurement covers the TX path. Error paths still
+ *          return a packed XDP_DROP.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>
