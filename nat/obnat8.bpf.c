@@ -16,13 +16,14 @@
 
 #define NAT_IP_ADDR 0x0a0a0200 // 10.10.2.0
 
-// Batch of 8. NAT with code reordering (all lookups first, then all rewrites)
-// and 4-way loop unrolling. Fully unrolling the batch (8x, and even more so 16x
+// Originally batch 8 (hence the name), now ported to batch 16. NAT with code
+// reordering (all lookups first, then all rewrites) and 4-way loop unrolling.
+// Measured at batch 8: fully unrolling the batch (8x, and even more so 16x
 // in tobnat) makes the verifier explode on the per-packet variable-offset packet
 // WRITES in update_ipaddr (>1,000,000 insns), independently of the stack. A
 // partially unrolled (4x) loop keeps the unrolling but lets the verifier
-// converge on the loop back-edge.
-#define BATCH_SIZE 8
+// converge on the loop back-edge. obnat/tobnat/tpobnat now use this same
+// structure at batch 16.
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -78,58 +79,69 @@ static __always_inline int update_ipaddr(void *data, void *data_end,
     return 0;
 }
 
-struct t_meta {
-    unsigned short valid;
-    unsigned short len[7];   // 7 explicit per-packet lengths (batch 8)
-};
-
+#define BATCH_SIZE 16
+// Packed per-slot verdict, 4 bits per slot (all 8 nibbles of the u32).
+#define ALL_ACT(a) ((a) + ((a) << 4) + ((a) << 8) + ((a) << 12) + \
+                    ((a) << 16) + ((a) << 20) + ((a) << 24) + ((a) << 28))
 
 SEC("xdp")
 int obnat8(struct xdp_md *ctx) {
     void *data = (void *)(long)(ctx->data);
     void *data_end = (void *)(long)(ctx->data_end);
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
-    if ((void *)(md + 1) > data) {
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
 
-    __u16 lens[BATCH_SIZE - 1];
-    #pragma unroll
-    for (int i = 0; i < BATCH_SIZE - 1; i++)
-        lens[i] = bpf_ntohs(md->len[i]);
+    // Batch header in [data_meta, data): [u16 bitmap][u16 len_0]...[u16 len_14]
+    // (network order, 16th length implicit). Each length is read inline and
+    // bounds-checked against data, so a slot past the header counts as 0.
+    // The offset mask is 0x7FFF (not 0x1FFF): it must cover the whole batch
+    // (16 * 1518 + 32 B, inside the 32 KB RX buffer). It only bounds the offset
+    // for the verifier; the data_end checks in get_ip/update_ipaddr are the
+    // real protection.
+    __u8 *m = (__u8 *)data_meta;
+    if (m + 2 > (__u8 *)data)
+        return ALL_ACT(XDP_DROP);
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
 
-    // Phase 1: NAT lookup for every packet (4-way unrolled). Code reordering:
-    // the cache-missing map lookups are all issued before any rewrite; store the
-    // looked-up address value.
-    __be32 nat_vals[BATCH_SIZE];
+    // Code reordering, obnat8 structure at batch 16: phase 1 issues every NAT
+    // lookup (the cache-missing hash-map accesses back to back), phase 2 does
+    // every rewrite. Both phases are 4-way partially unrolled inside a bounded
+    // loop over 16: a full 16x unroll makes the verifier exceed 1M insns on the
+    // variable-offset packet WRITES in update_ipaddr (see obnat8 history).
+    //
+    // On a lookup miss the slot stores its own source IP, so phase 2 rewrites
+    // saddr with itself (no-op apart from recomputing the checksum). This keeps
+    // every stored value an unknown scalar and avoids a per-slot "ok" flag that
+    // the verifier would have to track (constant-vs-unknown stack slots defeat
+    // state pruning across the 16 iterations). A slot whose frame is too short
+    // fails get_ip and is skipped by update_ipaddr's own bounds check.
+    __be32 nat_vals[BATCH_SIZE] = {0};   // 64 B of stack
     __u16 lentot = 0;
     #pragma unroll(4)
     for (int i = 0; i < BATCH_SIZE; i++) {
-        __be32 ip = get_ip(data + (lentot & 0x1FFF), data_end);
-        __be32 *p = bpf_map_lookup_elem(&external_map, &ip);
-        if (!p) {
-            bpf_printk("Failed to get nat ip\n");
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        if (valid & (1 << i)) {
+            __be32 ip = get_ip(data + (lentot & 0x7FFF), data_end);
+            __be32 *p = bpf_map_lookup_elem(&external_map, &ip);
+            nat_vals[i] = p ? *p : ip;
         }
-        nat_vals[i] = *p;
-        if (i < BATCH_SIZE - 1)
-            lentot += lens[i];
+        // advance by this slot's length even when the slot is skipped
+        __u8 *lp = m + 2 + (i << 1);
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    // Phase 2: rewrite every packet's source IP (deferred, 4-way unrolled).
+    // Phase 2: deferred rewrites. Offsets are recomputed from the header.
     lentot = 0;
     #pragma unroll(4)
     for (int i = 0; i < BATCH_SIZE; i++) {
-        if (update_ipaddr(data + (lentot & 0x1FFF), data_end, nat_vals[i])) {
-            bpf_printk("Failed to update ip\n");
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-        }
-        if (i < BATCH_SIZE - 1)
-            lentot += lens[i];
+        if (valid & (1 << i))
+            update_ipaddr(data + (lentot & 0x7FFF), data_end, nat_vals[i]);
+        // advance by this slot's length even when the slot is skipped
+        __u8 *lp = m + 2 + (i << 1);
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
+    return ALL_ACT(XDP_DROP);
 };
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

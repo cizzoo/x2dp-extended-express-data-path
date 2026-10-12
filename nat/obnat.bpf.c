@@ -81,73 +81,69 @@ static __always_inline int update_ipaddr(void *data, void *data_end,
     return 0;
 }
 
-struct t_meta {
-    unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
-};
-
+#define BATCH_SIZE 16
+// Packed per-slot verdict, 4 bits per slot (all 8 nibbles of the u32).
+#define ALL_ACT(a) ((a) + ((a) << 4) + ((a) << 8) + ((a) << 12) + \
+                    ((a) << 16) + ((a) << 20) + ((a) << 24) + ((a) << 28))
 
 SEC("xdp")
 int obnat(struct xdp_md *ctx) {
     void *data = (void *)(long)(ctx->data);
     void *data_end = (void *)(long)(ctx->data_end);
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
-    if ((void *)(md + 1) > data) {
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+
+    // Batch header in [data_meta, data): [u16 bitmap][u16 len_0]...[u16 len_14]
+    // (network order, 16th length implicit). Each length is read inline and
+    // bounds-checked against data, so a slot past the header counts as 0.
+    // The offset mask is 0x7FFF (not 0x1FFF): it must cover the whole batch
+    // (16 * 1518 + 32 B, inside the 32 KB RX buffer). It only bounds the offset
+    // for the verifier; the data_end checks in get_ip/update_ipaddr are the
+    // real protection.
+    __u8 *m = (__u8 *)data_meta;
+    if (m + 2 > (__u8 *)data)
+        return ALL_ACT(XDP_DROP);
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
+
+    // Code reordering, obnat8 structure at batch 16: phase 1 issues every NAT
+    // lookup (the cache-missing hash-map accesses back to back), phase 2 does
+    // every rewrite. Both phases are 4-way partially unrolled inside a bounded
+    // loop over 16: a full 16x unroll makes the verifier exceed 1M insns on the
+    // variable-offset packet WRITES in update_ipaddr (see obnat8 history).
+    //
+    // On a lookup miss the slot stores its own source IP, so phase 2 rewrites
+    // saddr with itself (no-op apart from recomputing the checksum). This keeps
+    // every stored value an unknown scalar and avoids a per-slot "ok" flag that
+    // the verifier would have to track (constant-vs-unknown stack slots defeat
+    // state pruning across the 16 iterations). A slot whose frame is too short
+    // fails get_ip and is skipped by update_ipaddr's own bounds check.
+    __be32 nat_vals[BATCH_SIZE] = {0};   // 64 B of stack
+    __u16 lentot = 0;
+    #pragma unroll(4)
+    for (int i = 0; i < BATCH_SIZE; i++) {
+        if (valid & (1 << i)) {
+            __be32 ip = get_ip(data + (lentot & 0x7FFF), data_end);
+            __be32 *p = bpf_map_lookup_elem(&external_map, &ip);
+            nat_vals[i] = p ? *p : ip;
+        }
+        // advance by this slot's length even when the slot is skipped
+        __u8 *lp = m + 2 + (i << 1);
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
-                                     bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-    __be32 ip1;
-    __be32 ip2;
-    __be32 ip3;
-    __be32 ip4;
-    __be32 *nat_ip1;
-    __be32 *nat_ip2;
-    __be32 *nat_ip3;
-    __be32 *nat_ip4;
-    ip1 = get_ip(data, data_end);
-    ip2 = get_ip(data + (lens[0] & 0x1FFF), data_end);
-    ip3 = get_ip(data + (lens[0] +lens[1] & 0x1FFF), data_end);
-    ip4 = get_ip(data + (lens[0] +lens[1] +lens[2] & 0x1FFF), data_end);
-
-    if (ip1 < 0 || ip2 < 0 || ip3 < 0 || ip4 < 0) {
-    // if (ip1 < 0 || ip2 < 0 || ip3 < 0) {
-    // if (ip1 < 0 || ip2 < 0) {
-        bpf_printk("Failed to get ip\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    // Phase 2: deferred rewrites. Offsets are recomputed from the header.
+    lentot = 0;
+    #pragma unroll(4)
+    for (int i = 0; i < BATCH_SIZE; i++) {
+        if (valid & (1 << i))
+            update_ipaddr(data + (lentot & 0x7FFF), data_end, nat_vals[i]);
+        // advance by this slot's length even when the slot is skipped
+        __u8 *lp = m + 2 + (i << 1);
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    nat_ip1 = bpf_map_lookup_elem(&external_map, &ip1);
-    nat_ip2 = bpf_map_lookup_elem(&external_map, &ip2);
-    nat_ip3 = bpf_map_lookup_elem(&external_map, &ip3);
-    nat_ip4 = bpf_map_lookup_elem(&external_map, &ip4);
-
-    if (!nat_ip1 || !nat_ip2 || !nat_ip3 || !nat_ip4) {
-    // if (!nat_ip1 || !nat_ip2 || !nat_ip3) {
-    // if (!nat_ip1 || !nat_ip2) {
-        bpf_printk("Failed to get nat ip\n");
-
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
-
-    int ret1 = update_ipaddr(data, data_end, *nat_ip1);
-    int ret2 = update_ipaddr(data + (lens[0] & 0x1FFF), data_end, *nat_ip2);
-    int ret3 = update_ipaddr(data + (lens[0] +lens[1] & 0x1FFF), data_end, *nat_ip3);
-    int ret4 = update_ipaddr(data + (lens[0] +lens[1] +lens[2] & 0x1FFF), data_end, *nat_ip4);
-
-    if (ret1 || ret2 || ret3 || ret4) {
-    // if (ret1 || ret2 || ret3) {
-    // if (ret1 || ret2) {
-        bpf_printk("Failed to update ip\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
-
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-
+    return ALL_ACT(XDP_DROP);
 };
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
