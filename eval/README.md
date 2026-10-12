@@ -1,9 +1,6 @@
 # Evaluation
 
-These scripts reproduce the measurements in the paper. Two machines are directly connected:
-
-- the **generator**, with a 100G NIC running TRex, replays a trace;
-- the **host**, with the Alveo running X²DP, runs the XDP programs and measures them.
+These scripts reproduce the measurements in the paper. The traffic is sent from a separate machine, directly connected to the Alveo, which replays the traces at line rate. The scripts here run on the host with the Alveo, plus the generators of the traces.
 
 | Path | Runs on | Contents |
 |---|---|---|
@@ -12,7 +9,6 @@ These scripts reproduce the measurements in the paper. Two machines are directly
 | `traffic/gen_trace.py` | anywhere | Synthetic trace generator (paper: 1M minimum-size packets, 100K flows, uniform) |
 | `traffic/make_nat_table.py` | anywhere | Builds the NAT address table from the trace(s) |
 | `traffic/conntrack/` | anywhere | Generator of complete TCP sessions, for the connection tracker |
-| `traffic/replay_trex.py` | generator | Replays a pcap in a loop through TRex |
 
 ```sh
 pip install -r eval/requirements.txt
@@ -29,11 +25,7 @@ conntrack/generate_pcap_conntrack.py -c conntrack/config.yaml -o tcp_sessions.pc
 
 `conntrack/config.yaml` contains the MAC addresses of our test bed. Change them to match your setup.
 
-Then, on the generator:
-
-```sh
-./replay_trex.py uniform_1M_100K.pcap --rate 100 --server <trex server>
-```
+Replay the trace in a loop from the traffic machine with any packet generator. Conntrack uses the TCP-session trace; all other applications use the uniform trace.
 
 The real-trace results (Table IV) use a CAIDA anonymized trace, which cannot be redistributed. `nat/caida.txt` is the NAT table built from that trace.
 
@@ -77,7 +69,7 @@ Results are written to `eval/results/<suite>/`:
 |---|---|---|
 | `micro.json` | Fig. 5–7 | Throughput of `XDP_PASS`/`XDP_DROP`/`XDP_TX` vs batch size |
 | `apps.json` | Fig. 8–9, Table IV | Throughput and CPU of the six applications vs batch size |
-| `latency.json` | Fig. 10 | Keeps each `XDP_TX` program loaded for 40 s while the generator measures the RTT |
+| `latency.json` | Fig. 10 | Keeps each `XDP_TX` program loaded for 40 s while the traffic machine measures the RTT |
 | `optimizations.json` | Fig. 11–13 | Batched vs optimized variants, with IPC and stalled cycles |
 | `simd.json` | Fig. 14 | Optimized vs AVX-512 kfunc variants of the sketches |
 
