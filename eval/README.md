@@ -29,6 +29,8 @@ Replay the trace in a loop from the traffic machine with any packet generator. C
 
 The real-trace results (Table IV) use a CAIDA anonymized trace, which cannot be redistributed. `nat/caida.txt` is the NAT table built from that trace.
 
+The NAT table must match the trace being replayed: the suites pass `nat/nat_tbl.txt`, which is built from the generated trace. When you replay the CAIDA trace, change the NAT `args` in the suite to `@/nat/caida.txt`.
+
 ## 2. Host setup
 
 - Program the card and load the modified driver (see the top-level README).
@@ -48,7 +50,7 @@ The runner drives the card through the `ioctl` utility that comes with the drive
 
 | Command | Effect |
 |---|---|
-| `ioctl -c 0` | **Baseline**: X²DP disabled; the NIC behaves as plain OpenNIC and XDP runs once per packet |
+| `ioctl -c 0` | **Baseline**: vanilla XDP. X²DP is disabled, the NIC behaves as plain OpenNIC, and XDP runs once per packet. It is reported as batch size 1 |
 | `ioctl -c 1` + `ioctl -c 9 -w N` | **X²DP** with batches of N packets (1–16) |
 | `ioctl -c 3 -w T` | Number of packets received in T seconds, used for throughput |
 
