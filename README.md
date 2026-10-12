@@ -39,7 +39,7 @@ For example, `aobcms` is the batched, optimized CMS that uses the SIMD kfunc, an
 
 ## Requirements
 
-- **NIC.** An AMD Alveo U55N programmed with `fpga/xdp_batch.bit`, plus the modified OpenNIC driver (`onic`) that decodes the batch and invokes XDP once per batch. <!-- TODO: link to the driver repository -->
+- **NIC.** An AMD Alveo U55N programmed with `fpga/xdp_batch.bit`, plus the modified OpenNIC driver (`onic`) that decodes the batch and invokes XDP once per batch. The driver will be released in a separate repository. <!-- TODO: link to the driver repository -->
 - **OS.** Linux 6.8. The evaluation used Ubuntu 24.04 on an Intel Xeon W5-3435X. AVX-512 is required for the kfunc.
 - **Toolchain.** clang/LLVM (tested with 18), `bpftool`, libbpf, and gcc. The NitroSketch loaders also need GSL (`libgsl-dev`).
 - **FPGA tooling.** Vitis/Vivado `xsdb` to load the bitstream, and [`pcimem`](https://github.com/billfarrow/pcimem) to set the shell registers.
@@ -102,11 +102,13 @@ A batched program does the following:
 
 - Loops over at most 16 slots, skips any slot whose bit is not set in the bitmap, and advances the packet offset by `len_i`. Each length is read inside the loop and bounds-checked against `ctx->data`, so the same code works for any batch size.
 - Masks the running offset with `& 0x7FFF` so the verifier sees it as bounded. A whole batch can grow past 8 KB.
-- Returns one verdict per slot, 4 bits each: `ACT | ACT << 4 | ACT << 8 | ...`.
+- Returns its verdict packed as one 4-bit action per slot: `ACT | ACT << 4 | ... | ACT << 28`.
 
-The driver applies each verdict. If any packet is marked `XDP_TX`, the whole page is sent back with an updated bitmap, and the NIC drops the invalid slots before putting packets on the wire. `XDP_REDIRECT` is not supported.
+The current driver reads only the lowest 4 bits and applies that action to every packet in the batch, so the programs return the same action for all slots. On `XDP_TX` the whole page is sent back with an updated bitmap, and the NIC drops the invalid slots before putting packets on the wire. `XDP_REDIRECT` is not supported.
 
-`cms/bcms.bpf.c` and `router/tbrouter.bpf.c` are minimal examples to start from.
+`cms/bcms.bpf.c` and `router/tbrouter.bpf.c` are minimal examples to start from. All batched programs are written for batches of 16 packets.
+
+To check that every program passes the verifier, build and run `sudo scripts/verify.sh` (or `sudo scripts/verify.sh cms` for a single application). It loads each object without attaching it and prints the number of processed instructions. The `a*` variants need the kfunc module loaded.
 
 Batch size is capped at 16 because the verifier allows a 512-byte stack and one million instructions, and both grow linearly with the number of packets per batch. Several variants contain comments that record measured verifier limits; read them before restructuring a program.
 

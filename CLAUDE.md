@@ -23,7 +23,7 @@ gcc -g -O2 -o X X.c -lbpf          # nitroSketch also links -lgsl -lgslcblas -lm
 - `xxhash/` is an out-of-tree **kernel module** (built with `bear -- make -C /lib/modules/$(uname -r)/build`). Use `make load`, `make unload` and `make reload` to manage it, and pass `LLVM=1` to build it with clang. It has to be loaded before any `a*` program that uses the kfunc.
 - `dpdk/`, `dpdk/router/` and `dpdk/conntrack/` contain DPDK (pkg-config `libdpdk`) versions that serve as the comparison baseline.
 
-There is no test suite. The checks are: the program has to pass the verifier at load time, and then it is benchmarked on the real NIC. To run a loader, use `sudo ./X <ifname>`. It attaches the program, fills its maps, and spins until SIGINT, which detaches it. Router loaders take the rules directory as an optional second argument (default `./RCC25`). NAT loaders take the address table file as their second argument. Use `bpftool prog`/`bpftool map` to inspect loaded state and `llvm-objdump -d X.bpf.o` to inspect the generated code.
+There is no test suite. The checks are: the program has to pass the verifier at load time (`sudo scripts/verify.sh [dir]` loads every built object without attaching it and prints the processed instruction count), and then it is benchmarked on the real NIC. To run a loader, use `sudo ./X <ifname>`. It attaches the program, fills its maps, and spins until SIGINT, which detaches it. Router loaders take the rules directory as an optional second argument (default `./RCC25`). NAT loaders take the address table file as their second argument. Use `bpftool prog`/`bpftool map` to inspect loaded state and `llvm-objdump -d X.bpf.o` to inspect the generated code.
 
 ## Variant naming convention
 
@@ -41,11 +41,11 @@ The prefixes on a base name (`cms`, `nat`, `router`, `conntrack`, `nitro1`/`nitr
 ## Batch format (what every batched program must handle)
 
 - **Header location:** the batching header is in the XDP metadata area `[ctx->data_meta, ctx->data)`. The first `__u16` (network order) is the valid-packet **bitmap**. It is followed by per-packet `__u16` lengths at `data_meta + 2 + 2*i`. Packets are stored back to back starting at `ctx->data`.
-- **Older programs:** older programs use a fixed `struct t_meta { valid, len1, len2, len3 }`, which covers 4 packets.
+- **Batch size:** all batched programs target batch 16. At batch 16 the header is 32 B (bitmap plus 15 explicit lengths). The FPGA rounds the header up to 4, 8 or 16 slots, and the length of the last packet is implicit.
 - **Current pattern:** the current pattern (from commit `4885b49` onward) reads each length inline inside the loop, with a bounds check against `data` (`if (lp + 2 <= data) lentot += ...`). This lets the same code work for batch sizes 4, 6, 8, 12 and 16, and a slot past the end of the header counts as length 0.
 - **Offset mask:** mask the running offset with `lentot & 0x7FFF`, **not** `0x1FFF`. The mask only exists so the verifier sees a bounded offset. It has to cover the whole batch (16 × 1518 + header, which fits in the driver's 32 KB RX buffer). With `0x1FFF` the offset wraps once the batch is larger than 8 KB, and the tail packets get parsed from the start of the buffer. The `data_end` checks in the per-packet parser are what actually provide safety.
 - **Skipping a slot:** advance the offset even for slots you skip. Skip a single packet with `continue` or a sentinel (e.g. `l4proto = 0`) rather than `return`, so one bad frame (ARP, IPv6) doesn't abort processing of the whole batch.
-- **Return value:** the return value packs one XDP action per slot, 4 bits each: `ACT + (ACT<<4) + (ACT<<8) + ...`. The driver splits the batch and applies each verdict. If any slot is `XDP_TX`, the whole page is sent back with an updated bitmap and the NIC filters it. `XDP_REDIRECT` is not supported.
+- **Return value:** the return value packs one XDP action per slot, 4 bits each, all 8 nibbles: `ACT + (ACT<<4) + ... + (ACT<<28)`. The current driver (`onic-driver`, branch `main`, not in this repo) reads only `ret & 0xF` and applies it to the whole batch, so return the same action for every slot. On `XDP_TX` the whole page is sent back with an updated bitmap and the NIC filters it. `XDP_REDIRECT` is not supported.
 
 ## Verifier constraints that shape the code
 
@@ -56,7 +56,7 @@ The prefixes on a base name (`cms`, `nat`, `router`, `conntrack`, `nitro1`/`nitr
 
 ## SIMD kfunc
 
-`xxhash/xxhash_avx.c` registers kfuncs for `BPF_PROG_TYPE_XDP` and wraps them in `kernel_fpu_begin/end`. The kfuncs it currently exports are `xxhash16x16` and `xxhash16x16_gather`. BPF programs declare kfuncs with `__ksym`, e.g. `void xxhash16x4(...) __ksym;` in `cms/abcms.bpf.c` and `nitroSketch/abnitro1.bpf.c`. The name a program declares has to match a symbol the loaded module exports, otherwise the load fails. Check both sides when editing either one. Other headers (`xxhash64.h`, `fasthash.h`, `lookup3.h`, `jhash.h`) are copied into each application directory instead of shared.
+`xxhash/xxhash_avx.c` registers kfuncs for `BPF_PROG_TYPE_XDP` and wraps them in `kernel_fpu_begin/end`. It exports `xxhash16x16(const __u64 *buf, __u32 seed, __u64 *out)`, which hashes 16 keys of 16 B (an unpacked, zero-initialized `struct pkt_5tuple`) into 16 u64 values with a single call per batch, plus `xxhash16x16_gather`, which is the same function with a gather-based load path. The `a*` programs declare it with `__ksym`. The verifier only checks the first 8 bytes behind each pointer argument, so `buf` and `out` must be stack arrays owned by the program (256 B + 128 B of the 512 B stack). The name a program declares has to match a symbol the loaded module exports, otherwise the load fails. Other headers (`xxhash64.h`, `fasthash.h`, `lookup3.h`, `jhash.h`) are copied into each application directory instead of shared.
 
 ## Repo hygiene
 

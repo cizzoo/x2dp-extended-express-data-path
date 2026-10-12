@@ -5,7 +5,7 @@ TARGETS:= tbnat nat bnat tnat obnat tobnat tpobnat obnat8
 
 all: clean $(TARGETS)
 
-$(TARGETS): 
+$(TARGETS): %: %.bpf.c %.c
 	clang -g -O2 --target=bpf -c $@.bpf.c -o $@.bpf.o
 	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
 	gcc -g -O2 -o $@ $@.c -lbpf

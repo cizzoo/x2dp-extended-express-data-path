@@ -5,7 +5,7 @@ ALGN := 64
 
 all: clean $(TARGETS)
 
-$(TARGETS): 
+$(TARGETS): %: %.bpf.c %.c
 	@echo "algn value: $(ALGN)"
 	clang -g -O3 --target=bpf -c $@.bpf.c -o $@.bpf.o -DALGN=$(ALGN)
 	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
