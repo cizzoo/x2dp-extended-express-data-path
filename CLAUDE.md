@@ -50,7 +50,7 @@ The prefixes on a base name (`cms`, `nat`, `router`, `conntrack`, `nitro1`/`nitr
 ## Verifier constraints that shape the code
 
 - N is capped at 16 because of the 512 B BPF stack and the 1M-instruction verifier limit. Both grow linearly with batch size.
-- Unrolling the whole batch can blow the instruction limit, especially with variable-offset packet **writes** (NAT `update_ipaddr`). `nat/obnat8.bpf.c` uses 4-way partial unrolling so the verifier converges on the loop back-edge. In `conntrack/lpobconntrack.bpf.c`, keeping several packets in flight through the state machine multiplies verifier states: only 1 packet in flight is accepted at batch 16. These header comments record measured results, so read them before restructuring.
+- Unrolling the whole batch can blow the instruction limit, especially with variable-offset packet **writes** (NAT `update_ipaddr`). `nat/obnat.bpf.c` uses 4-way partial unrolling so the verifier converges on the loop back-edge. In `conntrack/lpobconntrack.bpf.c`, keeping several packets in flight through the state machine multiplies verifier states: only 1 packet in flight is accepted at batch 16. These header comments record measured results, so read them before restructuring.
 - Remove `bpf_printk` from hot paths. Each call costs about 1 µs, and several existing parsers are not gated by a log level.
 - Share per-batch work across the batch. Do one map lookup for the CMS array, one `bpf_ktime_get_ns()` per batch, and one `bpf_get_prandom_u32()` for NitroSketch, instead of one per packet.
 

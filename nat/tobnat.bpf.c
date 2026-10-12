@@ -26,6 +26,13 @@
 #define NAT_IP_ADDR 0x0a0a0200 // 10.10.2.0
 
 
+// NAT with code reordering (all lookups first, then all rewrites) and 4-way
+// loop unrolling. Measured at batch 8: fully unrolling the batch makes the
+// verifier explode on the per-packet variable-offset packet WRITES in
+// update_ipaddr (>1,000,000 insns), independently of the stack. A partially
+// unrolled (4x) loop keeps the unrolling but lets the verifier converge on the
+// loop back-edge.
+
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1000000);

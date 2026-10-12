@@ -1,4 +1,4 @@
-TARGETS := bcms cms tbcms tcms obcms sobcms abcms aobcms ubcms
+TARGETS := bcms cms tbcms tcms obcms sobcms abcms aobcms
 ALGN := 64
 
 .PHONY : all clean

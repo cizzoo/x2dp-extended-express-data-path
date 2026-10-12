@@ -1,14 +1,4 @@
 TARGETS := bnitro1 nitro1 obnitro1 nitro2 bnitro2 obnitro2 abnitro2 abnitro1 aobnitro1 aobnitro2
-#cms regular single pkt version
-#rcms single pkt random
-#ubcms 4 map access batched version
-#bcms 1 map access batched
-#obcms loop unrolling
-#sobcms loop unrolling and split map access
-#rbcms 4 random
-#robcms 1 random
-
-
 
 .PHONY : all clean
 
