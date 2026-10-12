@@ -16,13 +16,6 @@ struct ipv4_lpm_key {
   __u32 data;
 };
 
-struct t_meta {
-  unsigned short valid;
-  unsigned short len1;
-  unsigned short len2;
-  unsigned short len3;
-};
-
 struct {
   __uint(type, BPF_MAP_TYPE_LPM_TRIE);
   __uint(max_entries, 1000000);
@@ -55,11 +48,6 @@ int tbrouter(struct xdp_md *ctx) {
   void *data = (void *)(long)(ctx->data);
   void *data_end = (void *)(long)(ctx->data_end);
   void *data_meta = (void *)(long)ctx->data_meta;
-  struct t_meta *md = data_meta;
-  if (md + 1 > data) {
-    bpf_printk("metadata header is not valid\n");
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
-  }
 
   // Per-packet lengths live in the long header at m + 2 + 2*i (network order),
   // where m = data_meta and the header spans [data_meta, data). Each length is
@@ -67,6 +55,10 @@ int tbrouter(struct xdp_md *ctx) {
   // batch size works (4/6/8/12/16) and missing packets (past the header) count
   // as length 0. Inline (not an array via size tiers) keeps the verifier cheap.
   __u8 *m = (__u8 *)data_meta;
+  if (m + 2 > (__u8 *)data)
+    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
+
+  __u16 valid = bpf_ntohs(*(__u16 *)m);
   // The mask on lentot below is 0x7FFF, not 0x1FFF: it must cover the WHOLE
   // batch (16 * 1518 + 32 = 24320 B, in the driver 32 KB RX buffer) or the
   // offset wraps and the tail packets are parsed from the start of the
@@ -74,33 +66,23 @@ int tbrouter(struct xdp_md *ctx) {
   // stays the data_end checks in the per-packet parser.
   __u16 lentot = 0;
   for (int i = 0; i < 16; i++) {
-    if (bpf_ntohs(md->valid) & (1 << i)) {
+    if (valid & (1 << i)) {
       struct ipv4_lpm_key key;
 
-      int ret = handle_pkt(data + (lentot & 0x7FFF), data_end, &key);
-      if (ret)
-        return ret;
-
-      __u8 *value = bpf_map_lookup_elem(&lpm, &key);
-
-      if (!value) {
-        // bpf_printk("Not Matched");
-        // return XDP_DROP;
-        // goto end;
-      }else{
-          // bpf_printk("Not Matched pkt 1\n");
-          // return XDP_DROP;
-          // goto end;
+      // on parse failure skip only this packet, never abort the batch
+      if (handle_pkt(data + (lentot & 0x7FFF), data_end, &key) == 0) {
+        __u8 *value = bpf_map_lookup_elem(&lpm, &key);
+        (void)value;
       }
-
-      // advance by this packet's real length (0 if past the header)
-      __u8 *lp = m + 2 + (i << 1);
-      if (lp + 2 <= data)
-        lentot += bpf_ntohs(*(__u16 *)lp);
     }
+
+    // advance by this slot's real length (0 if past the header), outside the
+    // validity test so invalid/skipped slots still move the offset
+    __u8 *lp = m + 2 + (i << 1);
+    if (lp + 2 <= (__u8 *)data)
+      lentot += bpf_ntohs(*(__u16 *)lp);
   }
 
-end:
   return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12) + (XDP_TX << 16) + (XDP_TX << 20) + (XDP_TX << 24) + (XDP_TX << 28);
 };
 

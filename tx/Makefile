@@ -5,7 +5,7 @@ TARGETS:=btx tx swaptx bswaptx swappass bswappass redirect
 
 all: $(TARGETS)
 
-$(TARGETS): %: %.c %.bpf.c
+$(TARGETS): %: %.bpf.c %.c
 	clang -g -O2 -target bpf -c $@.bpf.c -o $@.bpf.o 
 	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
 	gcc -g -O2 -o $@ $@.c -lbpf

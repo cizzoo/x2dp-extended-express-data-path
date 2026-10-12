@@ -18,13 +18,6 @@ struct ipv4_lpm_key {
   __u32 data;
 };
 
-struct t_meta {
-  unsigned short valid;
-  unsigned short len1;
-  unsigned short len2;
-  unsigned short len3;
-};
-
 // LPM trie only — no flow cache. This variant keeps the exact same map as
 // tbrouter and speeds up the batch purely by restructuring the code.
 struct {
@@ -57,20 +50,18 @@ int toorouter(struct xdp_md *ctx) {
   void *data = (void *)(long)(ctx->data);
   void *data_end = (void *)(long)(ctx->data_end);
   void *data_meta = (void *)(long)ctx->data_meta;
-  struct t_meta *md = data_meta;
-  if (md + 1 > data) {
-    bpf_printk("metadata header is not valid\n");
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-  }
-
   __u8 *m = (__u8 *)data_meta;
-  __u16 valid = bpf_ntohs(md->valid);
+  if (m + 2 > (__u8 *)data)
+    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
+
+  __u16 valid = bpf_ntohs(*(__u16 *)m);
 
   // ---- Pass 1: parse (no map access) --------------------------------------
   // A packet's offset is the prefix sum of the previous packets' lengths, and
   // those lengths live entirely in the meta header (read inline at m + 2 + 2*i,
   // bounds-checked against the header end so any batch size 4/6/8/12/16 works;
-  // packets past the header count as length 0). So every source IP can be
+  // packets past the header count as length 0; mask 0x7FFF covers the whole
+  // 16-packet batch, 0x1FFF would wrap past 8 KB). So every source IP can be
   // resolved up front, with zero dependency on any map lookup. Loop unrolled so
   // the parses issue back-to-back.
   struct ipv4_lpm_key keys[BATCH_SIZE];
@@ -81,11 +72,13 @@ int toorouter(struct xdp_md *ctx) {
     keys[i].data = 0;
     if (valid & (1 << i)) {
       __be32 saddr = 0;
-      if (parse_saddr(data + (lentot & 0x1FFF), data_end, &saddr) == 0)
+      if (parse_saddr(data + (lentot & 0x7FFF), data_end, &saddr) == 0)
         keys[i].data = saddr;
+      else
+        valid &= ~(1 << i); // unparsable: skip this slot's lookup only
     }
     __u8 *lp = m + 2 + (i << 1);
-    if (lp + 2 <= data)
+    if (lp + 2 <= (__u8 *)data)
       lentot += bpf_ntohs(*(__u16 *)lp);
   }
 
@@ -106,7 +99,7 @@ int toorouter(struct xdp_md *ctx) {
   }
   (void)hits;
 
-  return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
+  return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12) + (XDP_TX << 16) + (XDP_TX << 20) + (XDP_TX << 24) + (XDP_TX << 28);
 };
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

@@ -4,11 +4,6 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-struct t_meta
-{
-	__u16 offset;
-};
-
 SEC("xdp")
 int btx(struct xdp_md *ctx)
 {
