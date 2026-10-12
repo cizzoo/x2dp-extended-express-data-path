@@ -6,7 +6,7 @@
   "metrics": ["throughput"],
   "runs": [
     {"mode": "baseline", "progs": ["pass/pass", "drop/drop", "tx/tx"]},
-    {"mode": "x2dp", "batch-sizes": [1, 2, 4, 6, 8, 12, 16],
+    {"mode": "x2dp", "batch-sizes": [2, 4, 6, 8, 12, 16],
      "progs": ["pass/bpass", "drop/bdrop", "tx/btx"]}
   ]
 }

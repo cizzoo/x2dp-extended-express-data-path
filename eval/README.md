@@ -51,7 +51,7 @@ The runner drives the card through the `ioctl` utility that comes with the drive
 | Command | Effect |
 |---|---|
 | `ioctl -c 0` | **Baseline**: vanilla XDP. X²DP is disabled, the NIC behaves as plain OpenNIC, and XDP runs once per packet. It is reported as batch size 1 |
-| `ioctl -c 1` + `ioctl -c 9 -w N` | **X²DP** with batches of N packets (1–16) |
+| `ioctl -c 1` + `ioctl -c 9 -w N` | **X²DP** with batches of N packets (2–16); N = 1 is the baseline |
 | `ioctl -c 3 -w T` | Number of packets received in T seconds, used for throughput |
 
 Each run in a suite selects a mode and, for X²DP, a list of `batch-sizes`. For each batch size and each program, the runner does the following, `repetitions` times:

@@ -9,7 +9,7 @@
      "progs": ["router/trouter", "conntrack/conntrack",
                {"path": "nat/tnat", "args": "@/nat/nat_tbl.txt"},
                "cms/cms", "nitroSketch/nitro1", "nitroSketch/nitro2"]},
-    {"mode": "x2dp", "batch-sizes": [1, 2, 4, 6, 8, 12, 16],
+    {"mode": "x2dp", "batch-sizes": [2, 4, 6, 8, 12, 16],
      "progs": ["router/tbrouter", "conntrack/bconntrack",
                {"path": "nat/tbnat", "args": "@/nat/nat_tbl.txt"},
                "cms/bcms", "nitroSketch/bnitro1", "nitroSketch/bnitro2"]}

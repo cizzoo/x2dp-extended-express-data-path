@@ -179,6 +179,8 @@ def main():
         metrics = cfg.get("metrics", ["throughput"])
         mode = cfg["mode"]
         sizes = cfg.get("batch-sizes", [16]) if mode == "x2dp" else [1]
+        if mode == "x2dp" and not all(2 <= n <= 16 for n in sizes):
+            sys.exit(f"x2dp batch sizes must be 2..16 (1 is the baseline): {sizes}")
         for n in sizes:
             set_mode(args.ioctl, mode, n)
             log(out, f"mode {mode}, batch size {n}")
