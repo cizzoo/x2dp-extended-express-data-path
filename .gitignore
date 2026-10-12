@@ -1,17 +1,30 @@
+# Ignore everything without an extension (loader binaries), then re-include
+# directories and regular source files.
 *
 !/**/
 !*.*
+!Makefile
+!LICENSE
 
-.vscode
-*.cache
-*.pcap
+# Build outputs
 *.o
 *.skel.h
-*compile_commands.json
-!Makefile
-*.cmd
+*.ll
 *.ko
+*.cmd
 *.order
 *.symvers
-*.mod.c
 *.mod
+*.mod.c
+build/
+countmin.txt
+
+# Tooling and local files
+.vscode
+.claude/
+*.cache
+*compile_commands*.json
+*.swp
+*.log
+*.pcap
+*.pdf

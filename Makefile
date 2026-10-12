@@ -1,32 +1,23 @@
-SUBDIRS := acl \
-           bsoftware/cms \
-           bsoftware/conntrack \
-           bsoftware/nat \
-           bsoftware/nitroSketch \
-           bsoftware/router \
-           cms \
-           cmsOptimizations \
-           conntrack \
-           dpdk \
-           drop \
-           loadbalancer \
-           map \
-           nat \
-           nitroSketch \
-           pass \
-           router \
-           sampler \
-           tx
-           #xxhash
+# XDP programs and their libbpf loaders (clang, bpftool, libbpf).
+BPF_DIRS := pass drop tx router conntrack nat cms nitroSketch
 
-.PHONY: all clean $(SUBDIRS)
+# Built separately: kernel headers for the kfunc module, libdpdk for the
+# DPDK baselines.
+DPDK_DIRS := dpdk dpdk/router dpdk/conntrack
 
-all: $(SUBDIRS)
+.PHONY: all kfunc dpdk clean $(BPF_DIRS) $(DPDK_DIRS)
 
-$(SUBDIRS):
+all: $(BPF_DIRS)
+
+$(BPF_DIRS) $(DPDK_DIRS):
 	@$(MAKE) -C $@
 
+kfunc:
+	@$(MAKE) -C xxhash
+
+dpdk: $(DPDK_DIRS)
+
 clean:
-	@for dir in $(SUBDIRS); do \
+	@for dir in $(BPF_DIRS) $(DPDK_DIRS) xxhash; do \
 		$(MAKE) -C $$dir clean; \
 	done
