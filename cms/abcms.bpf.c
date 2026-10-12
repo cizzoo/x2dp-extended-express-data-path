@@ -37,9 +37,7 @@ void xxhash16x4(const __u64 *buf, const __u32 seed, __u8 *out) __ksym;
 
 struct t_meta {
   __u16 valid;
-  __u16 len1;
-  __u16 len2;
-  __u16 len3;
+  __u16 len[15];   // 15 explicit per-packet lengths (batch 16)
 };
 
 struct countmin {
@@ -153,30 +151,45 @@ int abcms(struct xdp_md *ctx) {
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
   __u16 lentot = 0;
-  __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
-                   bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
+  __u16 lens[15];
+  #pragma unroll
+  for (int i = 0; i < 15; i++)
+    lens[i] = bpf_ntohs(md->len[i]);
 
   __u32 zero = 0;
   struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
   if (!cm)
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-  struct pkt_5tuple pkts[4] __attribute__((aligned(32))) = {0};
-  __u16 pkts_hashes[4][4] = {0};
+  // Unpacked pkt_5tuple is 16 B, so 4 of them are a 64 B (512-bit) SIMD block.
+  struct pkt_5tuple pkts[16] __attribute__((aligned(32))) = {0};
+  __u16 pkts_hashes[16][4] = {0};
 
-  for (int i = 0; i < 4; i++) {
+  // Parse the whole batch of 16 (bitmap-aware).
+  for (int i = 0; i < 16; i++) {
     if (bpf_ntohs(md->valid) & (1 << i)) {
       int ret = handle_pkt(data + (lentot & 0x1FFF), data_end, &pkts[i]);
       if (ret) {
         bpf_printk("handle_pkt failed at i %d\n", i);
         return ret;
       }
-      lentot += lens[i];
     }
+    if (i < 15)
+      lentot += lens[i];
   }
 
-  hash(pkts, pkts_hashes);
-  countmin_add(cm, pkts_hashes);
+  // SIMD hash 4 packets per call -> 4 calls for the batch of 16.
+  hash(&pkts[0],  pkts_hashes + 0);
+  hash(&pkts[4],  pkts_hashes + 4);
+  hash(&pkts[8],  pkts_hashes + 8);
+  hash(&pkts[12], pkts_hashes + 12);
+
+  // Update the sketch, one group of 4 per call.
+  countmin_add(cm, pkts_hashes + 0);
+  countmin_add(cm, pkts_hashes + 4);
+  countmin_add(cm, pkts_hashes + 8);
+  countmin_add(cm, pkts_hashes + 12);
+
   return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 

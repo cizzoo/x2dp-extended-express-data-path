@@ -556,33 +556,47 @@ int salbconntrack(struct xdp_md *ctx) {
 
     }
 
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
+    /* Long self-describing batch header: [u16 valid][u16 len_0] ... in network
+     * order. The lengths are read inline and bounds-checked against the end of
+     * the header (== data), so ANY batch size works (4/8/16) and a slot past
+     * the header simply counts as length 0. The old code read three fixed
+     * lengths out of struct t_meta and looped 4 times, so it could not see
+     * packets 4..15 of a batch of 8 or 16.
+     */
+    __u8 *m = (__u8 *)data_meta;
+    __u16 valid = bpf_ntohs(md->valid);
     __u16 lentot = 0;
 
-    uint64_t timestamp;
-    // timestamp = bpf_ktime_get_boot_ns();
-    timestamp = bpf_ktime_get_ns();
+    /* One timestamp for the whole batch: every packet in it was delivered by
+     * the same DMA transfer, so they share an arrival instant. */
+    uint64_t timestamp = bpf_ktime_get_ns();
 
-    for( int i = 0; i < 4; i++ ) {
-        if(bpf_ntohs(md->valid) & (1 << i)) {
-
+    for (int i = 0; i < 16; i++) {
+        if (valid & (1 << i)) {
             struct packetHeaders pkt;
 
-            rc = parse_packet(data+(lentot &0x1FFF), data_end, &pkt);
-            // bpf_log_err("Parsing packet %d\n lentot = %u", i,lentot);
-            if (rc < 0){
-            bpf_log_err("Packet %d parsing failed.\n", i);
-            goto DROP;
-            }
-            rc = track(&pkt,timestamp);
-            if(rc < 0){
-                bpf_log_err("Tracking pkt %d failed.\n",i);
+            /* 0x7FFF, not 0x1FFF: the mask must cover the WHOLE batch
+             * (16 * 1518 + 32 = 24320 B, in the driver 32 KB RX buffer) or the
+             * offset wraps and the tail packets are parsed from the start of
+             * the buffer. */
+            rc = parse_packet(data + (lentot & 0x7FFF), data_end, &pkt);
+            if (rc < 0) {
+                bpf_log_err("Packet %d parsing failed.\n", i);
                 goto DROP;
             }
-    
-            lentot += lens[i];
-    
+            rc = track(&pkt, timestamp);
+            if (rc < 0) {
+                bpf_log_err("Tracking pkt %d failed.\n", i);
+                goto DROP;
+            }
         }
+
+        /* Advance by this packet's real length, OUTSIDE the validity test: an
+         * invalid slot still takes up its bytes in the batch. */
+        __u8 *lp = m + 2 + (i << 1);
+
+        if (lp + 2 <= data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
 

@@ -1,4 +1,4 @@
-TARGETS := conntrack bconntrack tbconntrack tconntrack obconntrack salbconntrack
+TARGETS := conntrack bconntrack tbconntrack tconntrack obconntrack pobconntrack salbconntrack
 
 .PHONY : all clean
 

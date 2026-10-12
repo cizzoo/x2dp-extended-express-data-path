@@ -436,6 +436,7 @@ int conntrack(struct xdp_md *ctx) {
     }
 
     if (pkt.l4proto == IPPROTO_UDP) {
+        return XDP_DROP;
         value = bpf_map_lookup_elem(&connections, &key);
         if (value != NULL) {
             // ctr_spin_lock(&value->lock);

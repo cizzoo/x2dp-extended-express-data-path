@@ -102,7 +102,7 @@ int bnat(struct xdp_md *ctx) {
   __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
                    bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
   __u16 lentot = 0;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 8; i++) {
     if (bpf_ntohs(md->valid) & (1 << i)) {
 
       __be32 ip = get_ip(data + (lentot & 0x1FFF), data_end);

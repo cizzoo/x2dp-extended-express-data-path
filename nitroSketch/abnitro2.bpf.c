@@ -31,9 +31,7 @@ void xxhash16x4(const __u64 *buf, const __u32 seed, __u8 *out) __ksym;
 
 struct t_meta {
   unsigned short valid;
-  unsigned short len1;
-  unsigned short len2;
-  unsigned short len3;
+  unsigned short len[15];   // 15 explicit per-packet lengths (batch 16)
 };
 
 #define _SEED_HASHFN 77
@@ -195,12 +193,10 @@ int abnitro2(struct xdp_md *ctx) {
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
   }
 
-  __u16 lentot = 0;
-  __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
-                   bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-
-  // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-  // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
+  __u16 lens[15];
+  #pragma unroll
+  for (int i = 0; i < 15; i++)
+    lens[i] = bpf_ntohs(md->len[i]);
 
   __u32 zero = 0;
   struct geosampling *geo = bpf_map_lookup_elem(&geosampling, &zero);
@@ -222,33 +218,46 @@ int abnitro2(struct xdp_md *ctx) {
   if (!cm)
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-  // int samplerate = 2;
-
   struct pkt_5tuple pkts[4] __attribute__((aligned(32))) = {0};
-  __u16 pkts_hashes[4][4] = {0};
+  __u16 pkts_hashes[16][4] = {0};
 
-  int ret1 = handle_pkt(data, data_end, &pkts[0]);
-  int ret2 = handle_pkt(data + (lens[0] & 0x1FFF), data_end, &pkts[1]);
-  int ret3 =
-      handle_pkt(data + ((lens[0] + lens[1]) & 0x1FFF), data_end, &pkts[2]);
-  int ret4 = handle_pkt(data + ((lens[0] + lens[1] + lens[2]) & 0x1FFF), data_end,
-                        &pkts[3]);
-  if (ret1 || ret2 || ret3 || ret4) {
-    // if (ret1 || ret2 || ret3){
-    // if (ret1 || ret2){
-    // bpf_printk("ret1: %d ret2: %d ret3: %d ret4:%d\n", ret1, ret2, ret3,
-    // ret4);
-    bpf_printk("ret1: %d ret2: %d\n", ret1, ret2);
+  // Parse + SIMD-hash in groups of 4, reusing a 4-slot buffer: keeping all 16
+  // packets (256 B) plus the 16 deferred hashes overflows the 512 B BPF stack,
+  // so only the 16 hashes are kept for the deferred update pass.
+  __u16 lentot = 0;
+  int ret = 0;
+  #pragma unroll
+  for (int i = 0; i < 16; i++) {
+    if ((i & 3) == 0)
+      __builtin_memset(pkts, 0, sizeof(pkts));
+    ret |= handle_pkt(data + (lentot & 0x1FFF), data_end, &pkts[i & 3]);
+    if (i < 15)
+      lentot += lens[i];
+    if ((i & 3) == 3)
+      hash(pkts, pkts_hashes + (i & ~3));
+  }
+  if (ret) {
     bpf_printk("handle_pkt failed\n");
-    return ret1;
+    return ret;
   }
 
-  hash(pkts, pkts_hashes);
-
-  nitro_update(cm, pkts_hashes[0], geo, row_to_update, next_geo_value);
-  nitro_update(cm, pkts_hashes[1], geo, row_to_update, next_geo_value);
-  nitro_update(cm, pkts_hashes[2], geo, row_to_update, next_geo_value);
-  nitro_update(cm, pkts_hashes[3], geo, row_to_update, next_geo_value);
+  // Update the sketch for all 16 (deferred, manually unrolled).
+  nitro_update(cm, pkts_hashes[0],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[1],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[2],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[3],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[4],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[5],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[6],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[7],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[8],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[9],  geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[10], geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[11], geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[12], geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[13], geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[14], geo, row_to_update, next_geo_value);
+  nitro_update(cm, pkts_hashes[15], geo, row_to_update, next_geo_value);
 
   return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }

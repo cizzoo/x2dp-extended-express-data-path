@@ -168,7 +168,7 @@ int bnitro1(struct xdp_md *ctx)
     if (!cm)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-    int samplerate = 2;
+    int samplerate = 4;
 
     for( int i = 0; i < 4; i++ ) {
         if(bpf_ntohs(md->valid) & (1 << i)) {

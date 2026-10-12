@@ -532,7 +532,7 @@ PASS_ACTION:;
     // bpf_log_debug("Redirect pkt to IF2 iface with ifindex: %d\n", conntrack_cfg.if_index_if2);
 
     // return bpf_redirect(conntrack_cfg.if_index_if2, 0);
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
 }
 
 
@@ -552,7 +552,7 @@ int bconntrack(struct xdp_md *ctx) {
     if (md + 1 > data)
     {
         bpf_printk("md + 1 > data\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
 
     }
 
@@ -562,6 +562,11 @@ int bconntrack(struct xdp_md *ctx) {
     // any batch size works (4/6/8/12/16) and missing packets (past the header)
     // count as length 0. Inline (not an array via tiers) keeps the verifier cheap.
     __u8 *m = (__u8 *)data_meta;
+    // The mask on lentot below is 0x7FFF, not 0x1FFF: it must cover the WHOLE
+    // batch (16 * 1518 + 32 = 24320 B, in the driver 32 KB RX buffer) or the
+    // offset wraps and the tail packets are parsed from the start of the
+    // buffer. It only bounds the offset for the verifier; the real protection
+    // stays the data_end checks in the per-packet parser.
     __u16 lentot = 0;
     //bpf_printk("ciao\n");
     for( int i = 0; i < 16; i++ ) {
@@ -570,7 +575,7 @@ int bconntrack(struct xdp_md *ctx) {
 
             struct packetHeaders pkt;
 
-            rc = parse_packet(data+(lentot &0x1FFF), data_end, &pkt);
+            rc = parse_packet(data+(lentot & 0x7FFF), data_end, &pkt);
             // bpf_log_err("Parsing packet %d\n lentot = %u", i,lentot);
             if (rc < 0){
                 bpf_printk("Packet %d parsing failed.\n", i);
@@ -622,12 +627,12 @@ int bconntrack(struct xdp_md *ctx) {
     //     goto DROP;
     // }
     // bpf_log_err("end main!\n");
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
     
 
 DROP:;
     bpf_log_err("Dropping packet!\n");
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);}
+    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);}
 
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

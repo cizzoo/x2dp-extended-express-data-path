@@ -51,6 +51,8 @@ static FORCE_INLINE bool validate_ethertype(void *data, void *data_end, __u16 *h
     struct ethhdr *eth = (struct ethhdr *)data;
     *h_proto = eth->h_proto;
 
+    // bpf_printk("hproto: %d\n", *h_proto);
+
     if (bpf_ntohs(*h_proto) < ETH_P_802_3_MIN)
         return false; // non-Ethernet II unsupported
 
@@ -77,6 +79,7 @@ static FORCE_INLINE int parse_packet(void *data, void *data_end, struct packetHe
     struct iphdr *iph;
 
     if (!validate_ethertype(data, data_end, &l3_proto, &nh_off)) {
+        bpf_printk("Invalid ethertype\n");
         bpf_log_err("Unrecognized L3 protocol\n");
         goto DROP;
     }
@@ -89,7 +92,7 @@ static FORCE_INLINE int parse_packet(void *data, void *data_end, struct packetHe
     case bpf_htons(ETH_P_ARP):
         goto ARP; // arp packet
     default:{
-        //bpf_printk("L3 protocol: %d\n && bpf_htons(ETH_P_IP): %d", l3_proto, bpf_htons(ETH_P_IP));
+        bpf_printk("L3 protocol: %d\n && bpf_htons(ETH_P_IP): %d", l3_proto, bpf_htons(ETH_P_IP));
         bpf_log_err("Unsupported L3 protocol\n");
         goto DROP;
         }   

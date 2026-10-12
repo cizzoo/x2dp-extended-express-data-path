@@ -161,44 +161,42 @@ int ubcms(struct xdp_md *ctx)
     {
         bpf_printk("md + 1 > data\n");
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-        // return XDP_PASS + (XDP_PASS << 4) + (XDP_PASS << 8) + (XDP_PASS << 12);
     }
-
     __u16 lentot = 0;
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-
-    // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-    // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
-
+    // Per-packet lengths live in the long header at m + 2 + 2*i (network order),
+    // where m = data_meta and the header spans [data_meta, data). Each length is
+    // read inline in the loop below, bounds-checked against the header end, so
+    // any batch size works (4/6/8/12/16) and missing packets (past the header)
+    // count as length 0. Inline (not an array via tiers) keeps the verifier cheap.
+    __u8 *m = (__u8 *)data_meta;
     __u32 zero = 0;
-    struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
-    if (!cm)
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+
     
-    // #pragma clang loop vectorize(disable) interleave(enable)
-    // // #pragma clang loop unroll(enable)
-     for( int i = 0; i < 4; i++ ) {
-        // if(bpf_ntohs(md->valid) & (1 << i)) {
-
-            struct pkt_5tuple pkt;
-            __u16 pkt_hashes[4];            
-
+    for( int i = 0; i < 16; i++ ) {
+        if(bpf_ntohs(md->valid) & (1 << i)) {
             
+            struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
+            if (!cm)
+                return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+            struct pkt_5tuple pkt;
+            __u16 pkt_hashes[4];
             int ret = handle_pkt(data + (lentot & 0x1FFF), data_end, &pkt);
             if (ret){
-                bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-                bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
                 bpf_printk("handle_pkt failed at i %d\n", i);
-                bpf_printk("len %d lens[i]%d, lentot %d\n",i, lens[i], lentot);
+                bpf_printk("lentot %d\n", lentot);
+                bpf_printk("valid=%x\n", bpf_ntohs(md->valid));
                 return ret;
             }
             hash(&pkt, sizeof(pkt), pkt_hashes);
             countmin_add(cm, pkt_hashes);
-            
-            lentot += lens[i];
-        // }
+            // bpf_printk("packet %d\n", i);
+            // bpf_printk("pkt %d: src_ip=%pI4 dst_ip=%pI4 src_port=%d dst_port=%d proto=%d\n", i, &pkt.src_ip, &pkt.dst_ip, bpf_ntohs(pkt.src_port), bpf_ntohs(pkt.dst_port), pkt.proto);
+            // advance by this packet's real length (0 if past the header)
+            __u8 *lp = m + 2 + (i << 1);
+            if (lp + 2 <= data)
+                lentot += bpf_ntohs(*(__u16 *)lp);
+        }
     }
-    
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 

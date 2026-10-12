@@ -64,7 +64,9 @@ int fill_geo(struct bpf_map *map) {
   gsl_rng_set(r, 42);
 
   for (int i = 0; i < 4096; i++) { // samplig rate
-    gs.geo_sampling_array[i] = gsl_ran_geometric(r, 0.006);
+    // gs.geo_sampling_array[i] = gsl_ran_geometric(r, 0.006);
+    gs.geo_sampling_array[i] = gsl_ran_geometric(r, 0.0625);
+
     // printf("gs.geo_sampling_array[%d] = %d\n", i, gs.geo_sampling_array[i]);
   }
 

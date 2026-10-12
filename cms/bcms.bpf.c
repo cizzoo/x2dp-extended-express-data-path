@@ -96,7 +96,7 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) >= data_end){
         bpf_printk("eth + 1 >= data_end\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
     }
 
     __u16 h_proto = eth->h_proto;
@@ -108,12 +108,12 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
     default:
         bpf_printk("eth\n");
         bpf_printk("h_proto: %d\n", h_proto);
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
     }
 
     struct iphdr *ip = data + sizeof(struct ethhdr);
     if ((void *)(ip + 1) >= data_end )
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
     pkt->src_ip = ip->saddr;
     pkt->dst_ip = ip->daddr;
     pkt->proto = ip->protocol;
@@ -126,7 +126,7 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
     {
         struct tcphdr *tcp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
         if (tcp + 1 > data_end)
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
         pkt->src_port = tcp->source;
         pkt->dst_port = tcp->dest;
         break;
@@ -136,7 +136,7 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
         struct udphdr *udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
         if ((void *)(udp + 1) > data_end){
             bpf_printk("udp\n");
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
         }
         pkt->src_port = udp->source;
         pkt->dst_port = udp->dest;
@@ -144,7 +144,7 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
     }
     default:
         bpf_printk("proto\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
     }
     return 0;
 }
@@ -160,8 +160,13 @@ int bcms(struct xdp_md *ctx)
     if ((void *)(md + 1) > data)
     {
         bpf_printk("md + 1 > data\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
     }
+    // The mask on lentot below is 0x7FFF, not 0x1FFF: it must cover the WHOLE
+    // batch (16 * 1518 + 32 = 24320 B, in the driver 32 KB RX buffer) or the
+    // offset wraps and the tail packets are parsed from the start of the
+    // buffer. It only bounds the offset for the verifier; the real protection
+    // stays the data_end checks in the per-packet parser.
     __u16 lentot = 0;
     // Per-packet lengths live in the long header at m + 2 + 2*i (network order),
     // where m = data_meta and the header spans [data_meta, data). Each length is
@@ -173,14 +178,14 @@ int bcms(struct xdp_md *ctx)
 
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
 
     for( int i = 0; i < 16; i++ ) {
         if(bpf_ntohs(md->valid) & (1 << i)) {
 
             struct pkt_5tuple pkt;
             __u16 pkt_hashes[4];
-            int ret = handle_pkt(data + (lentot & 0x1FFF), data_end, &pkt);
+            int ret = handle_pkt(data + (lentot & 0x7FFF), data_end, &pkt);
             if (ret){
                 bpf_printk("handle_pkt failed at i %d\n", i);
                 bpf_printk("lentot %d\n", lentot);
@@ -197,7 +202,7 @@ int bcms(struct xdp_md *ctx)
                 lentot += bpf_ntohs(*(__u16 *)lp);
         }
     }
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
 }
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

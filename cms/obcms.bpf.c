@@ -31,15 +31,14 @@
 struct t_meta
 {
     unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
+    unsigned short len[15];   // 15 explicit per-packet lengths (batch 16)
 };
 
 #define _SEED_HASHFN 77
 
 #define HASHFN_N 4
 #define COLUMNS 1048576
+#define BATCH_SIZE 16
 
 struct countmin
 {
@@ -149,30 +148,93 @@ int obcms(struct xdp_md *ctx)
     {
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
     __u32 zero = 0;
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-    struct pkt_5tuple pkt1, pkt2, pkt3, pkt4;
-    __u16 pkt_hashes1[4], pkt_hashes2[4], pkt_hashes3[4], pkt_hashes4[4];
-    int ret1 = handle_pkt(data, data_end, &pkt1);
-    int ret2 = handle_pkt(data+(lens[0] &0x1FFF), data_end, &pkt2);
-    int ret3 = handle_pkt(data+((lens[0]+lens[1])&0x1FFF), data_end, &pkt3);
-    int ret4 = handle_pkt(data+((lens[0]+lens[1]+lens[2])&0x1FFF), data_end, &pkt4);
-    if (ret1 || ret2 || ret3 || ret4){
+    // Per-packet start offsets, walking the batch by the header lengths.
+    __u16 off1  = 0;
+    __u16 off2  = off1  + bpf_ntohs(md->len[0]);
+    __u16 off3  = off2  + bpf_ntohs(md->len[1]);
+    __u16 off4  = off3  + bpf_ntohs(md->len[2]);
+    __u16 off5  = off4  + bpf_ntohs(md->len[3]);
+    __u16 off6  = off5  + bpf_ntohs(md->len[4]);
+    __u16 off7  = off6  + bpf_ntohs(md->len[5]);
+    __u16 off8  = off7  + bpf_ntohs(md->len[6]);
+    __u16 off9  = off8  + bpf_ntohs(md->len[7]);
+    __u16 off10 = off9  + bpf_ntohs(md->len[8]);
+    __u16 off11 = off10 + bpf_ntohs(md->len[9]);
+    __u16 off12 = off11 + bpf_ntohs(md->len[10]);
+    __u16 off13 = off12 + bpf_ntohs(md->len[11]);
+    __u16 off14 = off13 + bpf_ntohs(md->len[12]);
+    __u16 off15 = off14 + bpf_ntohs(md->len[13]);
+    __u16 off16 = off15 + bpf_ntohs(md->len[14]);
+
+    struct pkt_5tuple pkt1, pkt2, pkt3, pkt4, pkt5, pkt6, pkt7, pkt8,
+                      pkt9, pkt10, pkt11, pkt12, pkt13, pkt14, pkt15, pkt16;
+    __u16 h1[4], h2[4], h3[4], h4[4], h5[4], h6[4], h7[4], h8[4],
+          h9[4], h10[4], h11[4], h12[4], h13[4], h14[4], h15[4], h16[4];
+
+    // Parse all 16 packets (manually unrolled).
+    int ret = 0;
+    ret |= handle_pkt(data + (off1  & 0x1FFF), data_end, &pkt1);
+    ret |= handle_pkt(data + (off2  & 0x1FFF), data_end, &pkt2);
+    ret |= handle_pkt(data + (off3  & 0x1FFF), data_end, &pkt3);
+    ret |= handle_pkt(data + (off4  & 0x1FFF), data_end, &pkt4);
+    ret |= handle_pkt(data + (off5  & 0x1FFF), data_end, &pkt5);
+    ret |= handle_pkt(data + (off6  & 0x1FFF), data_end, &pkt6);
+    ret |= handle_pkt(data + (off7  & 0x1FFF), data_end, &pkt7);
+    ret |= handle_pkt(data + (off8  & 0x1FFF), data_end, &pkt8);
+    ret |= handle_pkt(data + (off9  & 0x1FFF), data_end, &pkt9);
+    ret |= handle_pkt(data + (off10 & 0x1FFF), data_end, &pkt10);
+    ret |= handle_pkt(data + (off11 & 0x1FFF), data_end, &pkt11);
+    ret |= handle_pkt(data + (off12 & 0x1FFF), data_end, &pkt12);
+    ret |= handle_pkt(data + (off13 & 0x1FFF), data_end, &pkt13);
+    ret |= handle_pkt(data + (off14 & 0x1FFF), data_end, &pkt14);
+    ret |= handle_pkt(data + (off15 & 0x1FFF), data_end, &pkt15);
+    ret |= handle_pkt(data + (off16 & 0x1FFF), data_end, &pkt16);
+    if (ret) {
         bpf_printk("handle_pkt failed\n");
-        return ret1;
+        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-    hash(&pkt1, sizeof(pkt1), pkt_hashes1);
-    hash(&pkt2, sizeof(pkt2), pkt_hashes2);
-    hash(&pkt3, sizeof(pkt3), pkt_hashes3);
-    hash(&pkt4, sizeof(pkt4), pkt_hashes4);
-    countmin_add(cm, pkt_hashes1);
-    countmin_add(cm, pkt_hashes2);
-    countmin_add(cm, pkt_hashes3);
-    countmin_add(cm, pkt_hashes4);
+
+    // Hash all 16 (manually unrolled).
+    hash(&pkt1,  sizeof(pkt1),  h1);
+    hash(&pkt2,  sizeof(pkt2),  h2);
+    hash(&pkt3,  sizeof(pkt3),  h3);
+    hash(&pkt4,  sizeof(pkt4),  h4);
+    hash(&pkt5,  sizeof(pkt5),  h5);
+    hash(&pkt6,  sizeof(pkt6),  h6);
+    hash(&pkt7,  sizeof(pkt7),  h7);
+    hash(&pkt8,  sizeof(pkt8),  h8);
+    hash(&pkt9,  sizeof(pkt9),  h9);
+    hash(&pkt10, sizeof(pkt10), h10);
+    hash(&pkt11, sizeof(pkt11), h11);
+    hash(&pkt12, sizeof(pkt12), h12);
+    hash(&pkt13, sizeof(pkt13), h13);
+    hash(&pkt14, sizeof(pkt14), h14);
+    hash(&pkt15, sizeof(pkt15), h15);
+    hash(&pkt16, sizeof(pkt16), h16);
+
+    // Update the sketch for all 16 (manually unrolled, deferred).
+    countmin_add(cm, h1);
+    countmin_add(cm, h2);
+    countmin_add(cm, h3);
+    countmin_add(cm, h4);
+    countmin_add(cm, h5);
+    countmin_add(cm, h6);
+    countmin_add(cm, h7);
+    countmin_add(cm, h8);
+    countmin_add(cm, h9);
+    countmin_add(cm, h10);
+    countmin_add(cm, h11);
+    countmin_add(cm, h12);
+    countmin_add(cm, h13);
+    countmin_add(cm, h14);
+    countmin_add(cm, h15);
+    countmin_add(cm, h16);
+
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 

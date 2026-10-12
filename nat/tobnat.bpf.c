@@ -25,6 +25,8 @@
 
 #define NAT_IP_ADDR 0x0a0a0200 // 10.10.2.0
 
+#define BATCH_SIZE 16
+
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1000000);
@@ -83,9 +85,7 @@ static __always_inline int update_ipaddr(void *data, void *data_end,
 
 struct t_meta {
     unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
+    unsigned short len[15];   // 15 explicit per-packet lengths (batch 16)
 };
 
 
@@ -98,38 +98,50 @@ int tobnat(struct xdp_md *ctx) {
     if ((void *)(md + 1) > data) {
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
-                                     bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-    __be32 ip1, ip2, ip3, ip4;
-    __be32 *nat_ip1, *nat_ip2, *nat_ip3, *nat_ip4;
-    ip1 = get_ip(data, data_end);
-    ip2 = get_ip(data + (lens[0] & 0x1FFF), data_end);
-    ip3 = get_ip(data + (lens[0] +lens[1] & 0x1FFF), data_end);
-    ip4 = get_ip(data + (lens[0] +lens[1] +lens[2] & 0x1FFF), data_end);
-    if (ip1 < 0 || ip2 < 0 || ip3 < 0 || ip4 < 0) {
-        bpf_printk("Failed to get ip\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
-    nat_ip1 = bpf_map_lookup_elem(&external_map, &ip1);
-    nat_ip2 = bpf_map_lookup_elem(&external_map, &ip2);
-    nat_ip3 = bpf_map_lookup_elem(&external_map, &ip3);
-    nat_ip4 = bpf_map_lookup_elem(&external_map, &ip4);
 
-    if (!nat_ip1 || !nat_ip2 || !nat_ip3 || !nat_ip4) {
-        bpf_printk("Failed to get nat ip\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
-    int ret1 = update_ipaddr(data, data_end, *nat_ip1);
-    int ret2 = update_ipaddr(data + (lens[0] & 0x1FFF), data_end, *nat_ip2);
-    int ret3 = update_ipaddr(data + (lens[0] +lens[1] & 0x1FFF), data_end, *nat_ip3);
-    int ret4 = update_ipaddr(data + (lens[0] +lens[1] +lens[2] & 0x1FFF), data_end, *nat_ip4);
+    // Read the 15 explicit per-packet lengths from the batch-16 header.
+    __u16 lens[BATCH_SIZE - 1];
+    #pragma unroll
+    for (int i = 0; i < BATCH_SIZE - 1; i++)
+        lens[i] = bpf_ntohs(md->len[i]);
 
-    if (ret1 || ret2 || ret3 || ret4) {
+    // Code reordering: issue every NAT lookup first (the cache-missing hash-map
+    // accesses are batched), storing only the looked-up address value, then do
+    // all the packet rewrites in a second pass.
+    //
+    // NOTE: unlike obcms this is NOT manually unrolled to 16. NAT's per-packet
+    // work (IP parse with bounds checks + checksum via update_ipaddr) is far
+    // heavier than the CMS hash: 16 unrolled copies both overflow the 512 B BPF
+    // stack and blow up verifier state (the load never converges). A rolled loop
+    // keeps the lookup/rewrite reordering while staying verifiable.
+    __be32 nat_vals[BATCH_SIZE];
+    __u16 lentot = 0;
+    for (int i = 0; i < BATCH_SIZE; i++) {
+        __be32 ip = get_ip(data + (lentot & 0x1FFF), data_end);
+        __be32 *p = bpf_map_lookup_elem(&external_map, &ip);
+        if (!p) {
+            bpf_printk("Failed to get nat ip\n");
+            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        }
+        nat_vals[i] = *p;
+        if (i < BATCH_SIZE - 1)
+            lentot += lens[i];
+    }
+
+    // Deferred rewrite pass.
+    int ret = 0;
+    lentot = 0;
+    for (int i = 0; i < BATCH_SIZE; i++) {
+        ret |= update_ipaddr(data + (lentot & 0x1FFF), data_end, nat_vals[i]);
+        if (i < BATCH_SIZE - 1)
+            lentot += lens[i];
+    }
+    if (ret) {
         bpf_printk("Failed to update ip\n");
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
     }
-    return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
 
+    return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
 };
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

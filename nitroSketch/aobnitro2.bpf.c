@@ -28,12 +28,11 @@
 #include <linux/types.h>
 #include <linux/udp.h>
 void xxhash16x4(const __u64 *buf, const __u32 seed, __u8 *out) __ksym;
+void xxhash16x16(const __u64 *buf, const __u32 seed, __u64 *out) __ksym;
 
 struct t_meta {
   unsigned short valid;
-  unsigned short len1;
-  unsigned short len2;
-  unsigned short len3;
+  unsigned short len[15];   // 15 explicit per-packet lengths (batch 16)
 };
 
 #define _SEED_HASHFN 77
@@ -195,12 +194,10 @@ int aobnitro2(struct xdp_md *ctx) {
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
   }
 
-  __u16 lentot = 0;
-  __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2),
-                   bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-
-  // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-  // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
+  __u16 lens[15];
+  #pragma unroll
+  for (int i = 0; i < 15; i++)
+    lens[i] = bpf_ntohs(md->len[i]);
 
   __u32 zero = 0;
   struct geosampling *geo = bpf_map_lookup_elem(&geosampling, &zero);
@@ -222,33 +219,40 @@ int aobnitro2(struct xdp_md *ctx) {
   if (!cm)
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-  // int samplerate = 2;
+  struct pkt_5tuple pkts[16] __attribute__((aligned(32))) = {0};
+  __u64 pkt_hashes[16] = {0};
 
-  struct pkt_5tuple pkts[4] __attribute__((aligned(32))) = {0};
-  __u16 pkts_hashes[4][4] = {0};
-
-  int ret1 = handle_pkt(data, data_end, &pkts[0]);
-  int ret2 = handle_pkt(data + (lens[0] & 0x1FFF), data_end, &pkts[1]);
-  int ret3 =
-      handle_pkt(data + ((lens[0] + lens[1]) & 0x1FFF), data_end, &pkts[2]);
-  int ret4 = handle_pkt(data + ((lens[0] + lens[1] + lens[2]) & 0x1FFF), data_end,
-                        &pkts[3]);
-  if (ret1 || ret2 || ret3 || ret4) {
-    // if (ret1 || ret2 || ret3){
-    // if (ret1 || ret2){
-    // bpf_printk("ret1: %d ret2: %d ret3: %d ret4:%d\n", ret1, ret2, ret3,
-    // ret4);
-    bpf_printk("ret1: %d ret2: %d\n", ret1, ret2);
+  // Parse all 16 packets into the contiguous buffer, hash them in ONE SIMD call
+  // (4 interleaved chains inside the kfunc, one FPU region), then update the
+  // sketch (deferred).
+  // Rolled loops (not unrolled): pkts[16] (256 B) leaves no room to unroll on
+  // the 512 B BPF stack. The SIMD reordering is the single xxhash16x16 call.
+  __u16 lentot = 0;
+  int ret = 0;
+  for (int i = 0; i < 16; i++) {
+    ret |= handle_pkt(data + (lentot & 0x1FFF), data_end, &pkts[i]);
+    if (i < 15)
+      lentot += lens[i];
+  }
+  if (ret) {
     bpf_printk("handle_pkt failed\n");
-    return ret1;
+    return ret;
   }
 
-  hash(pkts, pkts_hashes);
+  xxhash16x16((const __u64 *)pkts, _SEED_HASHFN, pkt_hashes);
 
-  nitro_update(cm, pkts_hashes[0], geo, row_to_update, next_geo_value);
-  nitro_update(cm, pkts_hashes[1], geo, row_to_update, next_geo_value);
-  nitro_update(cm, pkts_hashes[2], geo, row_to_update, next_geo_value);
-  nitro_update(cm, pkts_hashes[3], geo, row_to_update, next_geo_value);
+  // Deferred sketch update; extract the four 16-bit sub-hashes per packet.
+  // Rolled (not unrolled): with pkts[16] (256 B) on the stack, unrolling 16x
+  // nitro_update overflows the 512 B BPF stack, and the update is memory-bound
+  // anyway. The single xxhash16x16 call is the SIMD reordering.
+  for (int i = 0; i < 16; i++) {
+    __u16 h4[4];
+    h4[0] = pkt_hashes[i] & 0xFFFF;
+    h4[1] = (pkt_hashes[i] >> 16) & 0xFFFF;
+    h4[2] = (pkt_hashes[i] >> 32) & 0xFFFF;
+    h4[3] = (pkt_hashes[i] >> 48) & 0xFFFF;
+    nitro_update(cm, h4, geo, row_to_update, next_geo_value);
+  }
 
   return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }

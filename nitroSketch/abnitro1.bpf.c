@@ -31,9 +31,7 @@
 struct t_meta
 {
     unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
+    unsigned short len[15];   // 15 explicit per-packet lengths (batch 16)
 };
 
 #define _SEED_HASHFN 77
@@ -170,61 +168,61 @@ int abnitro1(struct xdp_md *ctx)
     }
 
     __u16 lentot = 0;
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-    
-    // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-    // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
+    __u16 lens[15];
+    #pragma unroll
+    for (int i = 0; i < 15; i++)
+        lens[i] = bpf_ntohs(md->len[i]);
 
-    __u8 randoms[4];
-    __u32 random = bpf_get_prandom_u32();
+    // 16 sampling bytes from 4 PRNG draws (one byte per packet).
+    __u8 randoms[16];
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        __u32 random = bpf_get_prandom_u32();
+        randoms[i * 4 + 0] = random & 0xFF;
+        randoms[i * 4 + 1] = random >> 8 & 0xFF;
+        randoms[i * 4 + 2] = random >> 16 & 0xFF;
+        randoms[i * 4 + 3] = random >> 24 & 0xFF;
+    }
 
-    randoms[0] = (random & 0xFF);
-    randoms[1] = random >> 8 & 0xFF;
-    randoms[2] = random >> 16 & 0xFF;
-    randoms[3] = random >> 24 & 0xFF;
-
-    int samplerate = 2;
+    int samplerate = 4;
 
     __u32 zero = 0;
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
         return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-     struct pkt_5tuple pkts[4] __attribute__((aligned(32))) = {0};
+    // Unpacked pkt_5tuple is 16 B, so 4 of them are a 64 B (512-bit) SIMD block.
+    // Parse + SIMD-hash in groups of 4, reusing a 4-slot buffer: keeping all 16
+    // packets on the stack (256 B) plus the 16 deferred hashes overflows the
+    // 512 B BPF stack, so only the 16 hashes are kept for the deferred update.
+    __u32 mask = (1 << samplerate) - 1;
+    struct pkt_5tuple pkts[4] __attribute__((aligned(32))) = {0};
     __u64 valid_cnt = 0;
-    __u16 pkts_hashes[4][4] = {0};
+    __u16 pkts_hashes[16][4] = {0};
 
-    for( int i = 0; i < 4; i++ ) {
-        // if(bpf_ntohs(md->valid) & (1 << i)) {
-
-            if ((randoms[i] & ((1 << samplerate)-1)) == 0){          
-
-                int ret = handle_pkt(data+(lentot &0x1FFF), data_end, &pkts[i]);
-                if (ret){
-                    bpf_printk("handle_pkt failed at i %d\n", i);
-                    // bpf_printk("len0 %d\n", lens[0]);
-                    return ret;
-                }
-
-            }
+    int ret = 0;
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        if ((i & 3) == 0)
+            __builtin_memset(pkts, 0, sizeof(pkts));
+        if ((randoms[i] & mask) == 0)
+            ret |= handle_pkt(data + (lentot & 0x1FFF), data_end, &pkts[i & 3]);
+        if (i < 15)
             lentot += lens[i];
-            valid_cnt++;
-        // }
+        valid_cnt++;
+        if ((i & 3) == 3)
+            hash(pkts, pkts_hashes + (i & ~3), valid_cnt);
+    }
+    if (ret) {
+        bpf_printk("handle_pkt failed\n");
+        return ret;
     }
 
-    hash(pkts, pkts_hashes, valid_cnt);
-
-
-
-    for( int i = 0; i < 4; i++ ) {
-        // if(bpf_ntohs(md->valid) & (1 << i)) {
-            if ((randoms[i] & ((1 << samplerate)-1)) == 0){
-                countmin_add(cm, pkts_hashes[i]);
-            }
-        // }
+    for (int i = 0; i < 16; i++) {
+        if ((randoms[i] & mask) == 0)
+            countmin_add(cm, pkts_hashes[i]);
     }
-    
-    
+
     return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 }
 
