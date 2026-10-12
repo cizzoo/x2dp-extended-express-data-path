@@ -79,7 +79,9 @@ static FORCE_INLINE int parse_packet(void *data, void *data_end, struct packetHe
     struct iphdr *iph;
 
     if (!validate_ethertype(data, data_end, &l3_proto, &nh_off)) {
-        bpf_printk("Invalid ethertype\n");
+        /* Gated by log_level like every other message here: an ungated
+         * bpf_printk costs ~1 us per ARP/IPv6/non-Ethernet-II frame, and the
+         * batched programs call this once per packet of the batch. */
         bpf_log_err("Unrecognized L3 protocol\n");
         goto DROP;
     }
@@ -92,7 +94,6 @@ static FORCE_INLINE int parse_packet(void *data, void *data_end, struct packetHe
     case bpf_htons(ETH_P_ARP):
         goto ARP; // arp packet
     default:{
-        bpf_printk("L3 protocol: %d\n && bpf_htons(ETH_P_IP): %d", l3_proto, bpf_htons(ETH_P_IP));
         bpf_log_err("Unsupported L3 protocol\n");
         goto DROP;
         }   

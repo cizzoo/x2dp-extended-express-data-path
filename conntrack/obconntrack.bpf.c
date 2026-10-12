@@ -29,17 +29,24 @@
 #include "conntrack_bpf_log.h"
 #include "conntrack_parser.h"
 
-struct t_meta
-{
-    unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
-};
+#define ALL_DROP                                                               \
+    (XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) +         \
+     (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28))
 
-static FORCE_INLINE int track(struct packetHeaders *pkt){
+/* Debug/error logging compiled out, as in salbconntrack and (l)pobconntrack:
+ * even gated by the const volatile log_level, each site costs a .rodata load
+ * and a branch that the verifier walks once per packet of the batch. */
+#undef bpf_log_debug
+#define bpf_log_debug(fmt, ...) do {} while (0)
+#undef bpf_log_err
+#define bpf_log_err(fmt, ...) do {} while (0)
+
+/* Takes the batch timestamp as a parameter: one bpf_ktime_get_ns() per batch,
+ * see the note above obconntrack(). */
+static FORCE_INLINE int track(struct packetHeaders *pkt, uint64_t timestamp){
     struct ct_k key;
-    __builtin_memset(&key, 0, sizeof(key));
+    /* No memset: ct_k is packed (no padding) and all five fields are assigned
+     * below on every path. */
     uint8_t ipRev = 0;
     uint8_t portRev = 0;
     if (pkt->srcIp <= pkt->dstIp) {
@@ -68,13 +75,12 @@ static FORCE_INLINE int track(struct packetHeaders *pkt){
         portRev = ipRev;
     }
 
+    /* newEntry is only consumed by the two bpf_map_update_elem() calls below,
+     * so it is zeroed there instead of on every packet (bpf_map_update_elem
+     * copies sizeof(ct_v), so the padding and the unused lock field do have to
+     * be initialized -- but only when we actually insert). */
     struct ct_v newEntry;
-    __builtin_memset(&newEntry, 0, sizeof(newEntry));
     struct ct_v *value;
-
-    uint64_t timestamp;
-    // timestamp = bpf_ktime_get_boot_ns();
-    timestamp = bpf_ktime_get_ns();
 
     /* == TCP  == */
     if (pkt->l4proto == IPPROTO_TCP) {
@@ -404,6 +410,7 @@ static FORCE_INLINE int track(struct packetHeaders *pkt){
 
         // New entry. It has to be a SYN.
         if ((pkt->flags & TCPHDR_SYN) != 0 && (pkt->flags | TCPHDR_SYN) == TCPHDR_SYN) {
+            __builtin_memset(&newEntry, 0, sizeof(newEntry));
             newEntry.state = SYN_SENT;
             newEntry.ttl = timestamp + TCP_SYN_SENT;
             newEntry.sequence = pkt->seqN + HEX_BE_ONE;
@@ -478,6 +485,7 @@ static FORCE_INLINE int track(struct packetHeaders *pkt){
     UDP_MISS:;
 
         // No entry found in both directions. Create one.
+        __builtin_memset(&newEntry, 0, sizeof(newEntry));
         newEntry.ttl = timestamp + UDP_NEW_TIMEOUT;
         newEntry.state = NEW;
         newEntry.sequence = 0;
@@ -533,66 +541,151 @@ PASS_ACTION:;
     // bpf_log_debug("Redirect pkt to IF2 iface with ifindex: %d\n", conntrack_cfg.if_index_if2);
 
     // return bpf_redirect(conntrack_cfg.if_index_if2, 0);
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    return ALL_DROP;
 }
 
 
+/* Parser used on the hot path instead of parse_packet() from
+ * conntrack_parser.h. Same job, but:
+ *
+ *   - no bpf_printk(): the two in parse_packet() ("Invalid ethertype",
+ *     "L3 protocol: ...") were NOT gated by conntrack_cfg.log_level (they
+ *     have since been removed from the header), so every
+ *     ARP/IPv6/non-TCP-UDP frame in the trace paid a ~1 us trace-buffer write.
+ *
+ *   - the L4 header is located from nh_off, so a VLAN-tagged frame is parsed
+ *     at the right offset (parse_packet() hardcodes ETH_HLEN + sizeof(iphdr)).
+ *
+ *   - it returns void and has a single exit. A packet that must not be
+ *     tracked (slot not set in the bitmap, not IPv4, not TCP/UDP, truncated)
+ *     comes back zeroed, and l4proto 0 makes track() fall straight through to
+ *     PASS_ACTION without touching the connections map. That is what lets the
+ *     caller invoke track() unconditionally: an "if (parsed_ok)" around each
+ *     track() forks the verifier state per packet, and four of those in a row
+ *     cost 297k processed instructions for a single group of 4 (the old
+ *     4-packet obconntrack, which aborted the whole batch on the first
+ *     failure and so kept one path, cost 35k).
+ */
+static FORCE_INLINE void parse_pkt_fast(void *data, void *data_end, int present,
+                                        struct packetHeaders *pkt) {
+    __u16 nh_off = ETH_HLEN;
+    __u16 h_proto;
+
+    __builtin_memset(pkt, 0, sizeof(*pkt));
+
+    if (!present)
+        return;
+
+    if (data + nh_off > data_end)
+        return;
+
+    h_proto = ((struct ethhdr *)data)->h_proto;
+
+#pragma unroll
+    for (int i = 0; i < 2; i++) {
+        if (h_proto == bpf_htons(ETH_P_8021Q) || h_proto == bpf_htons(ETH_P_8021AD)) {
+            struct _vlan_hdr *vhdr = (struct _vlan_hdr *)(data + nh_off);
+
+            nh_off += sizeof(struct _vlan_hdr);
+            if (data + nh_off > data_end)
+                return;
+            h_proto = vhdr->h_vlan_encapsulated_proto;
+        }
+    }
+
+    if (h_proto != bpf_htons(ETH_P_IP))
+        return;
+
+    struct iphdr *iph = (struct iphdr *)(data + nh_off);
+
+    if ((void *)(iph + 1) > data_end)
+        return;
+
+    if (iph->protocol == IPPROTO_TCP) {
+        struct tcp_hdr *tcp = (struct tcp_hdr *)((void *)iph + sizeof(*iph));
+
+        if ((void *)(tcp + 1) > data_end)
+            return;
+        pkt->srcPort = tcp->source;
+        pkt->dstPort = tcp->dest;
+        pkt->seqN = tcp->seq;
+        pkt->ackN = tcp->ack_seq;
+        pkt->flags = tcp->flags;
+    } else if (iph->protocol == IPPROTO_UDP) {
+        struct udphdr *udp = (struct udphdr *)((void *)iph + sizeof(*iph));
+
+        if ((void *)(udp + 1) > data_end)
+            return;
+        pkt->srcPort = udp->source;
+        pkt->dstPort = udp->dest;
+    } else {
+        return;
+    }
+
+    pkt->srcIp = iph->saddr;
+    pkt->dstIp = iph->daddr;
+    /* Committed last: track() keys off l4proto, so it stays 0 (= ignore this
+     * packet) on every path that did not reach a complete L4 header. */
+    pkt->l4proto = iph->protocol;
+}
+
+/* Optimized batched conntrack, batch of up to 16, connections in the
+ * BPF_MAP_TYPE_HASH from conntrack_maps.h (pobconntrack / lpobconntrack are
+ * the same program on an open-addressed array table).
+ *
+ * Compared with bconntrack (the plain loop over the per-packet code):
+ *   - ONE bpf_ktime_get_ns() per batch instead of one per packet: every packet
+ *     in a batch is delivered by the same DMA transfer;
+ *   - no bpf_printk() anywhere (parse_pkt_fast, logging compiled out);
+ *   - no per-packet memset of the key, newEntry zeroed only on insert;
+ *   - a packet that must not be tracked is skipped at no branch cost via
+ *     l4proto 0 (see parse_pkt_fast), so track() is called unconditionally.
+ *
+ * The 4-packet version of this program parsed all packets up front and then
+ * ran all the state machines (code reordering). That is NOT done here: at
+ * batch 16 every extra packet kept in flight multiplies the verifier states
+ * explored by track(). Measured on lpobconntrack: 2 or 4 packets in flight
+ * exceed the 1M-instruction limit, 1 in flight is accepted (755k). Hence one
+ * packet per iteration, in a bounded (not unrolled) loop.
+ */
 SEC("xdp")
 int obconntrack(struct xdp_md *ctx) {
-
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
-    if (md + 1 > data)
-    {
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
+    /* Batch header in [data_meta, data): [u16 valid bitmap][u16 len_0]...
+     * [u16 len_14], network order. Lengths are read inline, bounds-checked
+     * against the end of the header (== data), so any batch size works and a
+     * slot past the header counts as length 0. */
+    __u8 *m = (__u8 *)data_meta;
+
+    if (m + 2 > (__u8 *)data)
+        return ALL_DROP;
+
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
+    __u64 timestamp = bpf_ktime_get_ns();
+    __u16 lentot = 0;
+
+    for (int i = 0; i < 16; i++) {
+        struct packetHeaders pkt;
+
+        /* 0x7FFF covers the whole batch (16 * 1518 + 32 B, in the driver's
+         * 32 KB RX buffer); it only bounds the offset for the verifier. */
+        parse_pkt_fast(data + (lentot & 0x7FFF), data_end, valid & (1 << i),
+                       &pkt);
+        track(&pkt, timestamp);
+
+        /* Advance OUTSIDE the validity test: an invalid slot still takes up
+         * its bytes in the batch. */
+        __u8 *lp = m + 2 + (i << 1);
+
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
-
-
-    struct packetHeaders pkt1;
-    struct packetHeaders pkt2;
-    struct packetHeaders pkt3;
-    struct packetHeaders pkt4;
-
-    int ret1 = parse_packet(data, data_end, &pkt1);
-    int ret2 = parse_packet(data+((lens[0])&0x1FFF), data_end, &pkt2);
-    int ret3 = parse_packet(data+((lens[0]+lens[1])&0x1FFF), data_end, &pkt3);
-    int ret4 = parse_packet(data+((lens[0]+lens[1]+lens[2])&0x1FFF), data_end, &pkt4);
-
-    if (ret1 || ret2 || ret3 || ret4){
-    // if (ret1 || ret2 || ret3){
-    // if (ret1 || ret2){
-        // bpf_printk("ret1: %d ret2: %d ret3: %d ret4:%d\n", ret1, ret2, ret3, ret4);
-        bpf_printk("ret1: %d ret2: %d\n", ret1, ret2);
-        bpf_printk("handle_pkt failed\n");
-        return ret1;
-    }
-
-    int rc1 = track(&pkt1);
-    int rc2 = track(&pkt2);
-    int rc3 = track(&pkt3);
-    int rc4 = track(&pkt4);
-
-    if (rc1<0 || rc2<0 || rc3<0 || rc4<0){
-    // if (rc1 <0 || rc2<0 || rc3<0){
-    // if (rc1 <0 || rc2<0){
-
-        // bpf_printk("rc1: %d rc2: %d rc3: %d rc4:%d\n", rc1, rc2, rc3, rc4);
-        bpf_printk("rc1: %d rc2: %d\n", rc1, rc2);
-        bpf_printk("track failed\n");
-        return rc1;
-    }
-
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    
-
-DROP:;
-    bpf_log_err("Dropping packet!\n");
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);}
+    return ALL_DROP;
+}
 
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

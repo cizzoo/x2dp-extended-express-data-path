@@ -29,16 +29,12 @@
 #include "conntrack_bpf_log.h"
 #include "conntrack_parser.h"
 
+#define ALL_DROP (XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28))
+#define ALL_TX (XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12) + (XDP_TX << 16) + (XDP_TX << 20) + (XDP_TX << 24) + (XDP_TX << 28))
+#define ALL_ACT ALL_TX
 
-#define BATCH_SIZE 4
 
-struct t_meta
-{
-    unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
-};
+
 
 
 static FORCE_INLINE int track(struct packetHeaders *pkt){
@@ -537,90 +533,62 @@ PASS_ACTION:;
     // bpf_log_debug("Redirect pkt to IF2 iface with ifindex: %d\n", conntrack_cfg.if_index_if2);
 
     // return bpf_redirect(conntrack_cfg.if_index_if2, 0);
-    return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
+    return ALL_ACT;
 }
 
 
 SEC("xdp")
 int tbconntrack(struct xdp_md *ctx) {
-
-
-    int rc;
-    // struct packetHeaders pkt1;
-    // struct packetHeaders pkt2;
-
-
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
-    if (md + 1 > data)
-    {
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
 
-    }
+    /* Batch header in [data_meta, data): [u16 valid bitmap][u16 len_0]...
+     * [u16 len_14], network order. Each length is read inline in the loop,
+     * bounds-checked against the end of the header (== data), so any batch
+     * size works (4/6/8/12/16) and a slot past the header counts as length 0.
+     */
+    __u8 *m = (__u8 *)data_meta;
 
-    __u16 lens[4] = {bpf_ntohs(md->len1), bpf_ntohs(md->len2), bpf_ntohs(md->len3), bpf_ntohs(md->len3)};
+    if (m + 2 > (__u8 *)data)
+        return ALL_DROP;
+
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
+
     __u16 lentot = 0;
 
-    for( int i = 0; i < 4; i++ ) {
-        if(bpf_ntohs(md->valid) & (1 << i)) {
+    for (int i = 0; i < 16; i++) {
+        /* Zeroed on every slot: parse_packet() leaves fields unset on its
+         * failure paths and track() reads connStatus, which the parser never
+         * writes. Rewriting the whole struct each iteration also makes it dead
+         * at the loop head, so the verifier can prune across packets. */
+        struct packetHeaders pkt;
 
-            struct packetHeaders pkt;
+        __builtin_memset(&pkt, 0, sizeof(pkt));
 
-            rc = parse_packet(data+(lentot &0x1FFF), data_end, &pkt);
-            // bpf_log_err("Parsing packet %d\n lentot = %u", i,lentot);
-            if (rc < 0){
-            bpf_log_err("Packet %d parsing failed.\n", i);
-            goto DROP;
-            }
-            rc = track(&pkt);
-            if(rc < 0){
-                bpf_log_err("Tracking pkt %d failed.\n",i);
-                goto DROP;
-            }
-    
-            lentot += lens[i];
-    
+        if (valid & (1 << i)) {
+            /* 0x7FFF, not 0x1FFF: the mask must cover the WHOLE batch
+             * (16 * 1518 + 32 = 24320 B, in the driver 32 KB RX buffer) or the
+             * offset wraps and the tail packets are parsed from the start of
+             * the buffer. It only bounds the offset for the verifier; the real
+             * protection is the data_end checks in the parser.
+             *
+             * A packet that fails to parse (ARP, IPv6, non TCP/UDP, truncated)
+             * is skipped on its own; the rest of the batch is still tracked. */
+            if (parse_packet(data + (lentot & 0x7FFF), data_end, &pkt) == 0)
+                track(&pkt);
         }
+
+        /* Advance by this slot's real length OUTSIDE the validity test: an
+         * invalid slot still takes up its bytes in the batch. */
+        __u8 *lp = m + 2 + (i << 1);
+
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-
-    // bpf_log_debug("Received packet on interface.\n");
-
-
-    // rc = parse_packet(data, data_end, &pkt1);
-
-    // if (rc < 0){
-    //     bpf_log_err("Packet 1 parsing failed.\n");
-    //     goto DROP;
-    // }
-
-    // rc = parse_packet(data +(bpf_ntohs(md->offset) & 0xFF), data_end, &pkt2);
-
-    // if (rc < 0){
-    //     bpf_log_err("Packet 2 parsing failed.\n");
-    //     goto DROP;
-    // }
-
-    // rc = track(&pkt1);
-    // if(rc < 0){
-    //     bpf_log_err("Tracking pkt 1 failed.\n");
-    //     goto DROP;
-    // }
-
-    // rc = track(&pkt2);
-    // if(rc < 0){
-    //     bpf_log_err("Tracking pkt 2 failed.\n");
-    //     goto DROP;
-    // }
-    // bpf_log_err("end main!\n");
-    return XDP_TX + (XDP_TX << 4) + (XDP_TX << 8) + (XDP_TX << 12);
-    
-
-DROP:;
-    bpf_log_err("Dropping packet!\n");
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);}
+    return ALL_ACT;
+}
 
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

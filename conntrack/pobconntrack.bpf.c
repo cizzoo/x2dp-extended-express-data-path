@@ -126,14 +126,6 @@ static FORCE_INLINE void ct_insert(struct ct_k *key, struct ct_val *val) {
     slot->val = *val;
 }
 
-struct t_meta
-{
-    unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
-};
-
 /* Takes the batch timestamp as a parameter: see the note in pobconntrack(). */
 static FORCE_INLINE int track(struct packetHeaders *pkt, uint64_t timestamp){
     struct ct_k key;
@@ -636,7 +628,7 @@ PASS_ACTION:;
     // bpf_log_debug("Redirect pkt to IF2 iface with ifindex: %d\n", conntrack_cfg.if_index_if2);
 
     // return bpf_redirect(conntrack_cfg.if_index_if2, 0);
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    return ALL_DROP;
 }
 
 /* Per-packet length out of the long batch header: [u16 valid][u16 len_0]...
@@ -646,7 +638,7 @@ PASS_ACTION:;
 static FORCE_INLINE __u16 batch_len(__u8 *m, void *data, int i) {
     __u8 *lp = m + 2 + (i << 1);
 
-    if (lp + 2 > data)
+    if (lp + 2 > (__u8 *)data)
         return 0;
     return bpf_ntohs(*(__u16 *)lp);
 }
@@ -655,7 +647,8 @@ static FORCE_INLINE __u16 batch_len(__u8 *m, void *data, int i) {
  * conntrack_parser.h. Same job, but:
  *
  *   - no bpf_printk(): the two in parse_packet() ("Invalid ethertype",
- *     "L3 protocol: ...") are NOT gated by conntrack_cfg.log_level, so every
+ *     "L3 protocol: ...") were NOT gated by conntrack_cfg.log_level (they
+ *     have since been removed from the header), so every
  *     ARP/IPv6/non-TCP-UDP frame in the trace paid a ~1 us trace-buffer write.
  *
  *   - the L4 header is located from nh_off, so a VLAN-tagged frame is parsed
@@ -667,9 +660,9 @@ static FORCE_INLINE __u16 batch_len(__u8 *m, void *data, int i) {
  *     PASS_ACTION without touching the connections map. That is what lets the
  *     caller invoke track() unconditionally: an "if (parsed_ok)" around each
  *     track() forks the verifier state per packet, and four of those in a row
- *     cost 297k processed instructions for a single group of 4 (obconntrack,
- *     which aborts the whole batch on the first failure and so keeps one
- *     path, costs 35k).
+ *     cost 297k processed instructions for a single group of 4 (the old
+ *     4-packet obconntrack, which aborted the whole batch on the first
+ *     failure and so kept one path, cost 35k).
  */
 static FORCE_INLINE void parse_pkt_fast(void *data, void *data_end, int present,
                                         struct packetHeaders *pkt) {
@@ -736,7 +729,8 @@ static FORCE_INLINE void parse_pkt_fast(void *data, void *data_end, int present,
 
 
 
-/* Optimized batched conntrack. Differences from obconntrack:
+/* Optimized batched conntrack. Differences from the original 4-packet
+ * obconntrack (since ported to batch 16 along the same lines, on the HASH map):
  *
  * 1. Long self-describing header + validity bitmap, so it works at ANY batch
  *    size (4/8/16). obconntrack read three fixed lengths and always parsed
@@ -774,13 +768,14 @@ int pobconntrack(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
+    __u8 *m = (__u8 *)data_meta;
 
-    if (md + 1 > data)
+    /* Only the 2-byte bitmap is required up front; the lengths are
+     * bounds-checked one by one in batch_len(). */
+    if (m + 2 > (__u8 *)data)
         return ALL_DROP;
 
-    __u8 *m = (__u8 *)data_meta;
-    __u16 valid = bpf_ntohs(md->valid);
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
     __u64 timestamp = bpf_ktime_get_ns();
     __u16 lentot = 0;
 
