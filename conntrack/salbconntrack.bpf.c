@@ -418,6 +418,8 @@ static FORCE_INLINE int track(struct packetHeaders *pkt, uint64_t timestamp) {
     }
 
     if (pkt->l4proto == IPPROTO_UDP) {
+        /* UDP is not tracked, as in the conntrack baseline (TCP only). */
+        return ALL_DROP;
         value = bpf_map_lookup_elem(&connections, &key);
         if (value != NULL) {
             // ctr_spin_lock(&value->lock);
