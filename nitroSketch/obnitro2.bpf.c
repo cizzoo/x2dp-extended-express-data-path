@@ -94,35 +94,38 @@ static __always_inline void hash(const void *pkt, const __u64 len, __u16 hashes[
     return;
 }
 
-static __always_inline void nitro_add(struct countmin *cm, const __u16 hashes[4], __u32 row_to_update)
+// Walk the geometric schedule over one sampled packet, as nitro2 does per
+// packet, on local copies of geo->count and geo->geo_sampling_idx. Returns the
+// mask of sketch rows the packet updates. The schedule does not depend on the
+// packet contents, only on the packet order, so it can run in the parse phase
+// and the hash and update phases stay separate.
+static __always_inline __u8 geo_rows(const struct geosampling *geo, __u32 *count, __u32 *idx)
 {
-    if (row_to_update >= HASHFN_N)
-        return;
-    __u16 hash = hashes[row_to_update];
-    __u32 target_idx = hash & (COLUMNS - 1);
+    __u32 row = *count, next = 0;
+    __u8 rows = 0;
 
-    cm->values[row_to_update][target_idx]++;
-
-    return;
-}
-
-static __always_inline void nitro_update(struct countmin *cm, const __u16 hashes[4], struct geosampling *geo, __u32 row_to_update, __u32 next_geo_value)
-{
-    for (int i = 0; i < HASHFN_N; i++){
-        nitro_add(cm, hashes, row_to_update);
-
-        __u32 geo_value_idx = geo->geo_sampling_idx;
-        geo_value_idx = (geo_value_idx + 1) & (MAX_GEOSAMPLING_SIZE - 1);
-        next_geo_value = geo->geo_sampling_array[geo_value_idx];
-        row_to_update += next_geo_value;
-        geo->geo_sampling_idx = geo_value_idx;
-
-        if (row_to_update >= HASHFN_N) break;
+    for (int r = 0; r < HASHFN_N; r++) {
+        if (row < HASHFN_N)
+            rows |= 1 << row;
+        *idx = (*idx + 1) & (MAX_GEOSAMPLING_SIZE - 1);
+        next = geo->geo_sampling_array[*idx];
+        row += next;
+        if (row >= HASHFN_N)
+            break;
     }
 
-    // A geometric value of 0 should never happen (the loader fills >= 1).
-    if (next_geo_value > 0)
-        geo->count = next_geo_value - 1;
+    // A geometric value of 0 should never happen (the loader fills >= 1);
+    // nitro2 leaves count unchanged in that case.
+    if (next > 0)
+        *count = next - 1;
+    return rows;
+}
+
+static __always_inline void rows_add(struct countmin *cm, const __u16 hashes[4], __u8 rows)
+{
+    for (int r = 0; r < HASHFN_N; r++)
+        if (rows & (1 << r))
+            cm->values[r][hashes[r] & (COLUMNS - 1)]++;
 }
 
 // Parse one packet into its 5-tuple. Returns 0 on success, -1 if the packet is
@@ -192,14 +195,10 @@ int obnitro2(struct xdp_md *ctx)
     if (!geo)
         return ALL_DROP;
 
-    // Whole-batch geometric skip.
-    if (geo->count > HASHFN_N) {
-        geo->count -= HASHFN_N;
-        return ALL_DROP;
-    }
-
-    __u32 row_to_update = geo->count;
-    __u32 next_geo_value = 0;
+    // One geo lookup per batch: the schedule runs on local copies, written
+    // back once at the end.
+    __u32 count = geo->count;
+    __u32 idx = geo->geo_sampling_idx;
 
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
@@ -207,18 +206,30 @@ int obnitro2(struct xdp_md *ctx)
 
     struct pkt_5tuple pkts[BATCH];
     __u16 pkt_hashes[BATCH][4];
-    // ok[i] = slot i is valid in the bitmap, (sampled,) and parsed. Kept in a
-    // volatile stack array, not a constant bitmask in a register: a precise
-    // constant mask would give the verifier one state per mask value.
-    volatile __u8 ok[BATCH];
+    // Keep both arrays in memory: without this clang scalarizes them across the
+    // conditional phases and the spills push the frame past 512 B.
+    asm volatile("" : : "r"(pkts), "r"(pkt_hashes) : "memory");
+    // rows[i] = sketch rows slot i updates (0: invalid, not sampled, not
+    // parsed, or sampled with no row left). Kept in a volatile stack array,
+    // not a constant bitmask in a register: a precise constant mask would give
+    // the verifier one state per mask value.
+    volatile __u8 rows[BATCH];
 
-    // Phase 1: parse all valid slots.
+    // Phase 1: geometric skip, parse and row schedule, packet by packet in
+    // order, exactly as nitro2. A packet that fails to parse leaves the
+    // schedule untouched, as in nitro2. Not unrolled: each packet depends on
+    // the schedule left by the previous one, and the unrolled version
+    // exceeds the 512 B stack with spills.
     __u16 lentot = 0;
-    #pragma unroll
+    #pragma clang loop unroll(disable)
     for (int i = 0; i < BATCH; i++) {
-        ok[i] = 0;
-        if (valid & (1 << i))
-            ok[i] = handle_pkt(data + (lentot & 0x7FFF), data_end, &pkts[i]) == 0;
+        rows[i] = 0;
+        if (valid & (1 << i)) {
+            if (count > HASHFN_N)
+                count -= HASHFN_N;
+            else if (handle_pkt(data + (lentot & 0x7FFF), data_end, &pkts[i]) == 0)
+                rows[i] = geo_rows(geo, &count, &idx);
+        }
 
         // advance by this slot's length (0 if past the header), outside the
         // validity test so skipped slots still move the offset
@@ -227,17 +238,20 @@ int obnitro2(struct xdp_md *ctx)
             lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    // Phase 2: hash all parsed slots.
+    // Phase 2: hash the slots that update at least one row.
     #pragma unroll
     for (int i = 0; i < BATCH; i++)
-        if (ok[i])
+        if (rows[i])
             hash(&pkts[i], sizeof(pkts[i]), pkt_hashes[i]);
 
-    // Phase 3: update the sketch for all parsed slots.
+    // Phase 3: update the scheduled rows of each sampled slot.
     #pragma unroll
     for (int i = 0; i < BATCH; i++)
-        if (ok[i])
-            nitro_update(cm, pkt_hashes[i], geo, row_to_update, next_geo_value);
+        if (rows[i])
+            rows_add(cm, pkt_hashes[i], rows[i]);
+
+    geo->count = count;
+    geo->geo_sampling_idx = idx;
 
     return ALL_DROP;
 }
