@@ -67,8 +67,10 @@ gcc -g -O2 -o X X.c -lbpf
    ```sh
    sudo insmod onic.ko                      # modified OpenNIC driver
    sudo XSDB=/path/to/xsdb PCIMEM=/path/to/pcimem \
-        PCI_FUNCS="0000:16:00.0 0000:16:00.1" fpga/program_fpga.sh
+        PCI_FUNCS="<domain:bus:dev.0> <domain:bus:dev.1>" fpga/program_fpga.sh
    ```
+
+   `PCI_FUNCS` lists the two PCI functions of the card, one per 100G port. You can find them with `lspci -D -d 10ee:` (`10ee` is the Xilinx vendor ID). If you don't set it, the script uses `0000:16:00.0 0000:16:00.1`, which is where the card sits on our test machine.
 
    After a warm reboot the bitstream stays loaded, so `--no-program` is enough to redo the register setup and the driver binding.
 
