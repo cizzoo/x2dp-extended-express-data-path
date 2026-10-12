@@ -28,3 +28,7 @@ countmin.txt
 *.log
 *.pcap
 *.pdf
+
+# Evaluation outputs
+eval/results/
+__pycache__/

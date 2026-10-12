@@ -1,0 +1,18 @@
+{
+  "description": "Fig. 11-13: code sharing, loop unrolling/code reordering and map prefetching, with IPC and stalls",
+  "time": 10,
+  "repetitions": 3,
+  "cpu": 0,
+  "metrics": ["throughput", "ipc", "stalls"],
+  "runs": [
+    {"mode": "baseline",
+     "progs": ["cms/cms", {"path": "nat/tnat", "args": "@/nat/nat_tbl.txt"},
+               "nitroSketch/nitro1", "nitroSketch/nitro2"]},
+    {"mode": "x2dp", "batch-sizes": [16],
+     "progs": ["cms/bcms", "cms/obcms", "cms/sobcms",
+               {"path": "nat/tbnat", "args": "@/nat/nat_tbl.txt"},
+               {"path": "nat/tobnat", "args": "@/nat/nat_tbl.txt"},
+               "nitroSketch/bnitro1", "nitroSketch/obnitro1",
+               "nitroSketch/bnitro2", "nitroSketch/obnitro2"]}
+  ]
+}

@@ -1,0 +1,9 @@
+# run.py (host)
+psutil
+# traffic/ (trace generation)
+scapy
+numpy
+tqdm
+pyyaml
+progressbar2
+# traffic/replay_trex.py needs the TRex python API, shipped with TRex

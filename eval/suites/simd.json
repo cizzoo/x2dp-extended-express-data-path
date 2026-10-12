@@ -1,0 +1,15 @@
+{
+  "description": "Fig. 14: AVX-512 hash kfunc on the sketches (load xxhash/ first)",
+  "time": 10,
+  "repetitions": 3,
+  "cpu": 0,
+  "metrics": ["throughput"],
+  "runs": [
+    {"mode": "baseline",
+     "progs": ["cms/cms", "nitroSketch/nitro1", "nitroSketch/nitro2"]},
+    {"mode": "x2dp", "batch-sizes": [16],
+     "progs": ["cms/bcms", "cms/obcms", "cms/aobcms",
+               "nitroSketch/bnitro1", "nitroSketch/obnitro1", "nitroSketch/aobnitro1",
+               "nitroSketch/bnitro2", "nitroSketch/obnitro2", "nitroSketch/aobnitro2"]}
+  ]
+}

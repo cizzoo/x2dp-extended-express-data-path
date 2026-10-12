@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-eBPF/XDP benchmark programs for **X²DP (eXtended eXpress Data Path)**, described in `XDPBatch_ToN.pdf`. An FPGA SmartNIC (AMD Alveo U55N running a modified OpenNIC shell; the bitstream is `fpga/xdp_batch.bit`, loaded with `fpga/program_fpga.sh`) merges up to N=16 received packets into a single memory page with an in-band batching header. A modified OpenNIC driver then calls the XDP program **once per batch** instead of once per packet. The modified driver and the HDL are **not** in this repo. This repo holds the XDP programs, their userspace loaders and an AVX-512 kfunc kernel module.
+eBPF/XDP benchmark programs for **X²DP (eXtended eXpress Data Path)**, described in `XDPBatch_ToN.pdf`. An FPGA SmartNIC (AMD Alveo U55N running a modified OpenNIC shell; the bitstream is `fpga/xdp_batch.bit`, loaded with `fpga/program_fpga.sh`) merges up to N=16 received packets into a single memory page with an in-band batching header. A modified OpenNIC driver then calls the XDP program **once per batch** instead of once per packet. The modified driver and the HDL are **not** in this repo. This repo holds the XDP programs, their userspace loaders, an AVX-512 kfunc kernel module, and the evaluation scripts in `eval/`.
 
 The paper's argument is that batching removes the per-packet invocation overhead (B1). That in turn makes three more optimizations possible: code reordering/loop unrolling for better IPC (B2), sharing map lookups and helper calls across the batch (B3), and SIMD hashing through a kfunc (B4). Most of the files here are variants of one application that switch these optimizations on or off.
 
@@ -23,6 +23,10 @@ gcc -g -O2 -o X X.c -lbpf          # nitroSketch also links -lgsl -lgslcblas -lm
 - `xxhash/` is an out-of-tree **kernel module** (built with `bear -- make -C /lib/modules/$(uname -r)/build`). Use `make load`, `make unload` and `make reload` to manage it, and pass `LLVM=1` to build it with clang. It has to be loaded before any `a*` program that uses the kfunc.
 
 There is no test suite. The checks are: the program has to pass the verifier at load time (`sudo scripts/verify.sh [dir]` loads every built object without attaching it and prints the processed instruction count), and then it is benchmarked on the real NIC. To run a loader, use `sudo ./X <ifname>`. It attaches the program, fills its maps, and spins until SIGINT, which detaches it. Router loaders take the rules directory as an optional second argument (default `./RCC25`). NAT loaders take the address table file as their second argument. Use `bpftool prog`/`bpftool map` to inspect loaded state and `llvm-objdump -d X.bpf.o` to inspect the generated code.
+
+## Evaluation (`eval/`)
+
+`eval/run.py` runs a suite from `eval/suites/*.json`. Each suite is a list of runs, and each run has a `mode` (`baseline` or `x2dp`), `batch-sizes`, `progs` (paths relative to the repo root; `@` in `args` expands to the repo root) and `metrics`. The runner switches the card's mode with the onic-driver `ioctl` utility (`-c 0` baseline, `-c 1` X²DP, `-c 9 -w N` batch size), measures throughput with `ioctl -c 3 -w T`, and measures IPC and stalls with `perf stat -b <prog id>`. The program name used for `bpftool`/`perf` is the basename of the path, so the `SEC("xdp")` function must be named like its file. If you add or rename a variant that a suite references, update the suite too. `eval/traffic/` holds the trace generator, the NAT table builder, the TCP-session generator for conntrack and the TRex replay script.
 
 ## Variant naming convention
 

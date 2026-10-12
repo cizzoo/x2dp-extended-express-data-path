@@ -23,6 +23,7 @@ Across the evaluated applications, throughput improves by up to 3.3× over per-p
 | `nitroSketch/` | NitroSketch: `nitro1` samples with `bpf_get_prandom_u32()`, `nitro2` with precomputed geometric random variables |
 | `xxhash/` | Kernel module that exposes an AVX-512 xxhash64 as an XDP kfunc |
 | `fpga/` | X²DP bitstream for the Alveo U55N, and `program_fpga.sh` to load it |
+| `eval/` | Suite runner, experiment configurations and traffic generators used for the paper's results (see [`eval/README.md`](eval/README.md)) |
 
 Each application directory contains several **variants** of the same program. A variant `X` consists of `X.bpf.c` (the eBPF program) and `X.c` (a libbpf loader). The variant name is the application name with prefixes added in front of it:
 
@@ -88,6 +89,8 @@ gcc -g -O2 -o X X.c -lbpf
    cd cms    && sudo ./obcms <ifname>
    ```
 
+To reproduce the paper's experiments, see [`eval/README.md`](eval/README.md).
+
 ## Writing a batched program
 
 The NIC prepends a batching header that the driver exposes as XDP metadata, i.e. the range `[ctx->data_meta, ctx->data)`:
@@ -102,8 +105,6 @@ A batched program does the following:
 - Loops over at most 16 slots, skips any slot whose bit is not set in the bitmap, and advances the packet offset by `len_i`. Each length is read inside the loop and bounds-checked against `ctx->data`, so the same code works for any batch size.
 - Masks the running offset with `& 0x7FFF` so the verifier sees it as bounded. A whole batch can grow past 8 KB.
 - Returns its verdict packed as one 4-bit action per slot: `ACT | ACT << 4 | ... | ACT << 28`.
-
-The current driver reads only the lowest 4 bits and applies that action to every packet in the batch, so the programs return the same action for all slots. On `XDP_TX` the whole page is sent back with an updated bitmap, and the NIC drops the invalid slots before putting packets on the wire. `XDP_REDIRECT` is not supported.
 
 `cms/bcms.bpf.c` and `router/tbrouter.bpf.c` are minimal examples to start from. All batched programs are written for batches of 16 packets.
 

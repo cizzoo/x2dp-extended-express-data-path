@@ -1,0 +1,15 @@
+{
+  "description": "Fig. 10: keeps each XDP_TX program loaded while the traffic generator measures the RTT",
+  "time": 40,
+  "repetitions": 1,
+  "cpu": 0,
+  "metrics": ["throughput"],
+  "runs": [
+    {"mode": "baseline",
+     "progs": ["tx/tx", "router/trouter",
+               {"path": "nat/tnat", "args": "@/nat/nat_tbl.txt"}]},
+    {"mode": "x2dp", "batch-sizes": [16],
+     "progs": ["tx/btx", "router/tbrouter",
+               {"path": "nat/tbnat", "args": "@/nat/nat_tbl.txt"}]}
+  ]
+}
