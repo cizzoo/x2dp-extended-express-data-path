@@ -1,6 +1,6 @@
 # X²DP: eXtended eXpress Data Path
 
-This repository contains the XDP programs, the SIMD kfunc module, the DPDK baselines and the FPGA bitstream used to evaluate **X²DP**. X²DP is a framework that changes the XDP event granularity from one packet to a **batch of packets**.
+This repository contains the XDP programs, the SIMD kfunc module and the FPGA bitstream used to evaluate **X²DP**. X²DP is a framework that changes the XDP event granularity from one packet to a **batch of packets**.
 
 A standard XDP program runs once per received packet. In X²DP, an FPGA SmartNIC (AMD Alveo U55N with a modified [OpenNIC shell](https://github.com/Xilinx/open-nic-shell)) merges up to 16 packets into a single memory page and prepends a compact batching header. A modified OpenNIC driver then runs the XDP program **once per batch**. Processing a whole batch per invocation:
 
@@ -22,7 +22,6 @@ Across the evaluated applications, throughput improves by up to 3.3× over per-p
 | `cms/` | Count-Min Sketch |
 | `nitroSketch/` | NitroSketch: `nitro1` samples with `bpf_get_prandom_u32()`, `nitro2` with precomputed geometric random variables |
 | `xxhash/` | Kernel module that exposes an AVX-512 xxhash64 as an XDP kfunc |
-| `dpdk/` | DPDK baselines: CMS (`dpdk/`), router (`dpdk/router/`) and conntrack (`dpdk/conntrack/`) |
 | `fpga/` | X²DP bitstream for the Alveo U55N, and `program_fpga.sh` to load it |
 
 Each application directory contains several **variants** of the same program. A variant `X` consists of `X.bpf.c` (the eBPF program) and `X.c` (a libbpf loader). The variant name is the application name with prefixes added in front of it:
@@ -43,7 +42,6 @@ For example, `aobcms` is the batched, optimized CMS that uses the SIMD kfunc, an
 - **OS.** Linux 6.8. The evaluation used Ubuntu 24.04 on an Intel Xeon W5-3435X. AVX-512 is required for the kfunc.
 - **Toolchain.** clang/LLVM (tested with 18), `bpftool`, libbpf, and gcc. The NitroSketch loaders also need GSL (`libgsl-dev`).
 - **FPGA tooling.** Vitis/Vivado `xsdb` to load the bitstream, and [`pcimem`](https://github.com/billfarrow/pcimem) to set the shell registers.
-- **DPDK baselines.** DPDK 20.11, found through `pkg-config libdpdk`.
 
 ## Build
 
@@ -52,7 +50,6 @@ make                 # every XDP application (pass drop tx router conntrack nat 
 make -C cms          # a single application (all of its variants)
 make -C cms aobcms   # a single variant
 make kfunc           # the AVX-512 kfunc module (needs the headers of the running kernel)
-make dpdk            # the DPDK baselines
 ```
 
 A per-application `make` cleans that directory first. Each variant is built like this:
@@ -73,7 +70,7 @@ gcc -g -O2 -o X X.c -lbpf
         PCI_FUNCS="0000:16:00.0 0000:16:00.1" fpga/program_fpga.sh
    ```
 
-   To run the DPDK baselines, add `--driver vfio-pci`. After a warm reboot the bitstream stays loaded, so `--no-program` is enough to redo the register setup and the driver binding.
+   After a warm reboot the bitstream stays loaded, so `--no-program` is enough to redo the register setup and the driver binding.
 
 2. If you are running an `a*` variant, load the kfunc module:
 
@@ -122,7 +119,6 @@ V. Paschali, A. Monterubbiano, F. Fazzari, S. Miano, S. Pontarelli, *X²DP: eXte
 The repository is released under the [Apache License 2.0](LICENSE). Files derived from third-party code keep their original license headers:
 
 - Polycube conntrack: GPL-2.0 OR BSD-3-Clause.
-- Intel DPDK examples: BSD-3-Clause.
 - Hash function headers: their respective authors' licenses.
 
 The eBPF programs declare a GPL-compatible license, which the kernel requires, and the kernel module in `xxhash/` is GPL.

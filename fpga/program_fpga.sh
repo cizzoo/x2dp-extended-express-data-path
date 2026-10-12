@@ -1,15 +1,11 @@
 #!/bin/bash
 # Program the Alveo U55N with the X2DP bitstream, re-enumerate it on PCIe,
-# set the OpenNIC shell registers and bind both functions to a driver.
+# set the OpenNIC shell registers and bind both functions to the modified
+# OpenNIC driver (onic), which must already be loaded.
 #
-# Usage: sudo ./program_fpga.sh [--driver onic|vfio-pci] [bitstream.bit]
-#        sudo ./program_fpga.sh --no-program [--driver ...]
-#                                      # only registers and binding,
-#                                      # e.g. after a reboot
-#
-# --driver onic      (default) the modified OpenNIC kernel driver, for XDP.
-#                    The onic module must already be loaded.
-# --driver vfio-pci  for the DPDK baselines in dpdk/.
+# Usage: sudo ./program_fpga.sh [bitstream.bit]
+#        sudo ./program_fpga.sh --no-program   # only registers and binding,
+#                                              # e.g. after a reboot
 #
 # Environment overrides:
 #   XSDB      path to the Vitis xsdb binary     (default: xsdb in PATH)
@@ -23,12 +19,10 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROGRAM=1
-DRIVER=onic
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--no-program) PROGRAM=0; shift ;;
-	--driver) DRIVER="$2"; shift 2 ;;
-	-h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+	-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
 	*) break ;;
 	esac
 done
@@ -46,16 +40,11 @@ unbind() {
 }
 
 bind() {
-	echo "$2" > "/sys/bus/pci/devices/$1/driver_override"
+	echo onic > "/sys/bus/pci/devices/$1/driver_override"
 	echo "$1" > /sys/bus/pci/drivers_probe
 }
 
-case "$DRIVER" in
-onic|vfio-pci) ;;
-*) echo "unknown driver: $DRIVER (expected onic or vfio-pci)"; exit 1 ;;
-esac
-[ "$DRIVER" = vfio-pci ] && modprobe vfio-pci
-[ -d "/sys/bus/pci/drivers/$DRIVER" ] || { echo "driver $DRIVER is not loaded"; exit 1; }
+[ -d /sys/bus/pci/drivers/onic ] || { echo "the onic driver is not loaded"; exit 1; }
 
 if [ "$PROGRAM" = 1 ]; then
 [ -f "$BITSTREAM" ] || { echo "bitstream not found: $BITSTREAM"; exit 1; }
@@ -102,6 +91,6 @@ for reg in 0x1000=0x1 0x2000=0x00010001 0x8014=0x1 0x800c=0x1 0xC014=0x1 0xC00c=
 done
 
 for f in "${FUNCS[@]}"; do
-	bind "$f" "$DRIVER"
+	bind "$f"
 	echo "$f -> $(basename "$(readlink "/sys/bus/pci/devices/$f/driver")")"
 done
