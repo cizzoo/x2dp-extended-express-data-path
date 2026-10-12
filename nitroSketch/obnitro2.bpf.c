@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+// obnitro2: optimized batched NitroSketch (geometric sampling). Shared per-batch
+// work (B3): one geo lookup, one skip check and one countmin lookup per batch;
+// if the next geometric update is beyond this batch the whole batch is skipped.
+// Otherwise code reordering + unrolling (Listing 2): parse all valid slots,
+// then hash them, then update the sketch, each phase fully unrolled.
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>
@@ -26,27 +32,20 @@
 #include <bpf/bpf_endian.h>
 #include <linux/types.h>
 #include <bpf/bpf_helpers.h>
-#include "fasthash.h"
 #include "xxhash64.h"
 
-struct t_meta
-{
-    unsigned short valid;
-    unsigned short len[15];   // 15 explicit per-packet lengths (batch 16)
-};
+// The driver applies (ret & 0xF) to the whole batch; keep all 8 nibbles packed.
+#define ALL_DROP                                                               \
+    (XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) +         \
+     (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28))
+
+#define BATCH 16
 
 #define _SEED_HASHFN 77
 
 #define HASHFN_N 4
 #define COLUMNS 1048576
 #define MAX_GEOSAMPLING_SIZE 4096
-
-
-
-struct countmin
-{
-    __u64 values[HASHFN_N][COLUMNS];
-};
 
 struct pkt_5tuple
 {
@@ -56,6 +55,11 @@ struct pkt_5tuple
     __be16 dst_port;
     __u8 proto;
 } __attribute__((packed));
+
+struct countmin
+{
+    __u64 values[HASHFN_N][COLUMNS];
+};
 
 struct
 {
@@ -67,9 +71,9 @@ struct
 
 struct geosampling
 {
-      __u32 geo_sampling_array[MAX_GEOSAMPLING_SIZE];
-      __u32 geo_sampling_idx;
-      __u32 count;
+    __u32 geo_sampling_array[MAX_GEOSAMPLING_SIZE];
+    __u32 geo_sampling_idx;
+    __u32 count;
 };
 
 struct
@@ -79,7 +83,6 @@ struct
     __type(key, __u32);
     __type(value, struct geosampling);
 } geosampling SEC(".maps");
-
 
 static __always_inline void hash(const void *pkt, const __u64 len, __u16 hashes[4])
 {
@@ -91,30 +94,20 @@ static __always_inline void hash(const void *pkt, const __u64 len, __u16 hashes[
     return;
 }
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-
-
-
 static __always_inline void nitro_add(struct countmin *cm, const __u16 hashes[4], __u32 row_to_update)
 {
-
     if (row_to_update >= HASHFN_N)
         return;
     __u16 hash = hashes[row_to_update];
-    __u16 target_idx = hash & (COLUMNS - 1);
-    
+    __u32 target_idx = hash & (COLUMNS - 1);
+
     cm->values[row_to_update][target_idx]++;
 
     return;
 }
 
-
 static __always_inline void nitro_update(struct countmin *cm, const __u16 hashes[4], struct geosampling *geo, __u32 row_to_update, __u32 next_geo_value)
 {
-    // __u32 next_geo_value;
-    // __u32 row_to_update = geo->count;
-
-
     for (int i = 0; i < HASHFN_N; i++){
         nitro_add(cm, hashes, row_to_update);
 
@@ -123,50 +116,39 @@ static __always_inline void nitro_update(struct countmin *cm, const __u16 hashes
         next_geo_value = geo->geo_sampling_array[geo_value_idx];
         row_to_update += next_geo_value;
         geo->geo_sampling_idx = geo_value_idx;
-        
+
         if (row_to_update >= HASHFN_N) break;
     }
 
-    if (next_geo_value > 0) {
+    // A geometric value of 0 should never happen (the loader fills >= 1).
+    if (next_geo_value > 0)
         geo->count = next_geo_value - 1;
-    } else {
-        bpf_printk("Geo sammpling variable is 0. This should never happen");
-    }
-
 }
+
+// Parse one packet into its 5-tuple. Returns 0 on success, -1 if the packet is
+// not IPv4 TCP/UDP or is truncated: the caller skips only that slot.
 static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tuple *pkt)
 {
     struct ethhdr *eth = data;
-    if (eth + 1 >= data_end){
-        bpf_printk("eth + 1 >= data_end\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
+    if ((void *)(eth + 1) >= data_end)
+        return -1;
 
-    __u16 h_proto = eth->h_proto;
-
-    switch (h_proto)
-    {
-    case bpf_htons(ETH_P_IP):
-        break;
-    default:
-        bpf_printk("eth\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return -1;
 
     struct iphdr *ip = data + sizeof(struct ethhdr);
-    if ((void *)(ip + 1) >= data_end )
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    if ((void *)(ip + 1) >= data_end)
+        return -1;
     pkt->src_ip = ip->saddr;
     pkt->dst_ip = ip->daddr;
     pkt->proto = ip->protocol;
-    // bpf_printk("src_ip: %pI4\n", &ip->saddr);
     switch (ip->protocol)
     {
     case IPPROTO_TCP:
     {
         struct tcphdr *tcp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-        if (tcp + 1 > data_end)
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        if ((void *)(tcp + 1) > data_end)
+            return -1;
         pkt->src_port = tcp->source;
         pkt->dst_port = tcp->dest;
         break;
@@ -174,17 +156,14 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
     case IPPROTO_UDP:
     {
         struct udphdr *udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-        if ((void *)(udp + 1) > data_end){
-            bpf_printk("udp\n");
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-        }
+        if ((void *)(udp + 1) > data_end)
+            return -1;
         pkt->src_port = udp->source;
         pkt->dst_port = udp->dest;
         break;
     }
     default:
-        bpf_printk("proto\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return -1;
     }
     return 0;
 }
@@ -192,73 +171,75 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
 SEC("xdp")
 int obnitro2(struct xdp_md *ctx)
 {
-
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
-    if ((void *)(md + 1) > data)
-    {
-        bpf_printk("md + 1 > data\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
 
-    __u16 lens[15];
-    #pragma unroll
-    for (int i = 0; i < 15; i++)
-        lens[i] = bpf_ntohs(md->len[i]);
+    // Batch header at [data_meta, data): [u16 bitmap][u16 len_0]..[u16 len_14],
+    // network order (the 16th length is implicit). Packets are back to back
+    // from data. Each length is read inline, bounds-checked against data, so a
+    // shorter header (batch 4/8) makes the missing slots count as length 0.
+    // The offset mask is 0x7FFF so it covers the whole batch (16 * 1518 + 32 B
+    // in the 32 KB RX buffer); it only bounds the offset for the verifier, the
+    // data_end checks in handle_pkt are the real protection.
+    __u8 *m = (__u8 *)data_meta;
+    if (m + 2 > (__u8 *)data)
+        return ALL_DROP;
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
 
     __u32 zero = 0;
     struct geosampling *geo = bpf_map_lookup_elem(&geosampling, &zero);
+    if (!geo)
+        return ALL_DROP;
 
-    if (!geo){
-        bpf_printk("geo is null\n");
-        return XDP_DROP;
-    }
-
-    // Whole-batch geometric skip: if the next update is beyond this batch, drop
-    // the entire batch (so the batch we DO process runs the full reordering +
-    // unrolling below on all 16 packets).
+    // Whole-batch geometric skip.
     if (geo->count > HASHFN_N) {
         geo->count -= HASHFN_N;
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return ALL_DROP;
     }
 
     __u32 row_to_update = geo->count;
-    __u32 next_geo_value;
+    __u32 next_geo_value = 0;
 
     struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
     if (!cm)
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+        return ALL_DROP;
 
-    struct pkt_5tuple pkts[16];
-    __u16 pkt_hashes[16][4];
+    struct pkt_5tuple pkts[BATCH];
+    __u16 pkt_hashes[BATCH][4];
+    // ok[i] = slot i is valid in the bitmap, (sampled,) and parsed. Kept in a
+    // volatile stack array, not a constant bitmask in a register: a precise
+    // constant mask would give the verifier one state per mask value.
+    volatile __u8 ok[BATCH];
 
-    // Code reordering + loop unrolling: parse all 16, then hash all 16, then
-    // update the sketch for all 16 (each phase manually unrolled).
+    // Phase 1: parse all valid slots.
     __u16 lentot = 0;
-    int ret = 0;
     #pragma unroll
-    for (int i = 0; i < 16; i++) {
-        ret |= handle_pkt(data + (lentot & 0x1FFF), data_end, &pkts[i]);
-        if (i < 15)
-            lentot += lens[i];
+    for (int i = 0; i < BATCH; i++) {
+        ok[i] = 0;
+        if (valid & (1 << i))
+            ok[i] = handle_pkt(data + (lentot & 0x7FFF), data_end, &pkts[i]) == 0;
+
+        // advance by this slot's length (0 if past the header), outside the
+        // validity test so skipped slots still move the offset
+        __u8 *lp = m + 2 + (i << 1);
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
-    if (ret) {
-        bpf_printk("handle_pkt failed\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
-    }
 
+    // Phase 2: hash all parsed slots.
     #pragma unroll
-    for (int i = 0; i < 16; i++)
-        hash(&pkts[i], sizeof(pkts[i]), pkt_hashes[i]);
+    for (int i = 0; i < BATCH; i++)
+        if (ok[i])
+            hash(&pkts[i], sizeof(pkts[i]), pkt_hashes[i]);
 
+    // Phase 3: update the sketch for all parsed slots.
     #pragma unroll
-    for (int i = 0; i < 16; i++)
-        nitro_update(cm, pkt_hashes[i], geo, row_to_update, next_geo_value);
+    for (int i = 0; i < BATCH; i++)
+        if (ok[i])
+            nitro_update(cm, pkt_hashes[i], geo, row_to_update, next_geo_value);
 
-    
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12);
+    return ALL_DROP;
 }
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

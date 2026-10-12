@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+// bnitro1: batched NitroSketch (uniform sampling), per-packet logic unchanged
+// (paper Listing 1): for each valid slot one map lookup, one PRNG draw and, if
+// sampled, parse + xxhash64 + count-min update.
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>
@@ -26,27 +30,19 @@
 #include <bpf/bpf_endian.h>
 #include <linux/types.h>
 #include <bpf/bpf_helpers.h>
-#include "fasthash.h"
 #include "xxhash64.h"
 
-struct t_meta
-{
-    unsigned short valid;
-    unsigned short len1;
-    unsigned short len2;
-    unsigned short len3;
-};
+// The driver applies (ret & 0xF) to the whole batch; keep all 8 nibbles packed.
+#define ALL_DROP                                                               \
+    (XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) +         \
+     (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28))
+
+#define BATCH 16
 
 #define _SEED_HASHFN 77
 
 #define HASHFN_N 4
 #define COLUMNS 1048576
-
-
-struct countmin
-{
-    __u64 values[HASHFN_N][COLUMNS];
-};
 
 struct pkt_5tuple
 {
@@ -56,6 +52,11 @@ struct pkt_5tuple
     __be16 dst_port;
     __u8 proto;
 } __attribute__((packed));
+
+struct countmin
+{
+    __u64 values[HASHFN_N][COLUMNS];
+};
 
 struct
 {
@@ -75,52 +76,40 @@ static __always_inline void hash(const void *pkt, const __u64 len, __u16 hashes[
     return;
 }
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-
 static __always_inline void countmin_add(struct countmin *cm, const __u16 hashes[4])
 {
-    for (int i = 0; i < ARRAY_SIZE(hashes); i++)
+    for (int i = 0; i < HASHFN_N; i++)
     {
         __u32 target_idx = hashes[i] & (COLUMNS - 1);
-        //__sync_fetch_and_add(&cm->values[i][target_idx], 1); //;< -this crash clang
         cm->values[i][target_idx]++;
     }
     return;
 }
 
+// Parse one packet into its 5-tuple. Returns 0 on success, -1 if the packet is
+// not IPv4 TCP/UDP or is truncated: the caller skips only that slot.
 static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tuple *pkt)
 {
     struct ethhdr *eth = data;
-    if (eth + 1 >= data_end){
-        bpf_printk("eth + 1 >= data_end\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
-    }
+    if ((void *)(eth + 1) >= data_end)
+        return -1;
 
-    __u16 h_proto = eth->h_proto;
-
-    switch (h_proto)
-    {
-    case bpf_htons(ETH_P_IP):
-        break;
-    default:
-        bpf_printk("eth\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
-    }
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return -1;
 
     struct iphdr *ip = data + sizeof(struct ethhdr);
-    if ((void *)(ip + 1) >= data_end )
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
+    if ((void *)(ip + 1) >= data_end)
+        return -1;
     pkt->src_ip = ip->saddr;
     pkt->dst_ip = ip->daddr;
     pkt->proto = ip->protocol;
-    // bpf_printk("src_ip: %pI4\n", &ip->saddr);
     switch (ip->protocol)
     {
     case IPPROTO_TCP:
     {
         struct tcphdr *tcp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-        if (tcp + 1 > data_end)
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
+        if ((void *)(tcp + 1) > data_end)
+            return -1;
         pkt->src_port = tcp->source;
         pkt->dst_port = tcp->dest;
         break;
@@ -128,17 +117,14 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
     case IPPROTO_UDP:
     {
         struct udphdr *udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-        if ((void *)(udp + 1) > data_end){
-            bpf_printk("udp\n");
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
-        }
+        if ((void *)(udp + 1) > data_end)
+            return -1;
         pkt->src_port = udp->source;
         pkt->dst_port = udp->dest;
         break;
     }
     default:
-        bpf_printk("proto\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
+        return -1;
     }
     return 0;
 }
@@ -146,68 +132,53 @@ static __always_inline int handle_pkt(void *data, void *data_end, struct pkt_5tu
 SEC("xdp")
 int bnitro1(struct xdp_md *ctx)
 {
-
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
     void *data_meta = (void *)(long)ctx->data_meta;
-    struct t_meta *md = data_meta;
-    if ((void *)(md + 1) > data)
-    {
-        bpf_printk("md + 1 > data\n");
-        return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
-    }
 
-    // The mask on lentot below is 0x7FFF, not 0x1FFF: it must cover the WHOLE
-    // batch (16 * 1518 + 32 = 24320 B, in the driver 32 KB RX buffer) or the
-    // offset wraps and the tail packets are parsed from the start of the
-    // buffer. It only bounds the offset for the verifier; the real protection
-    // stays the data_end checks in the per-packet parser.
-    __u16 lentot = 0;
-    // Per-packet lengths live in the long header at m + 2 + 2*i (network order),
-    // where m = data_meta and the header spans [data_meta, data). Each length is
-    // read inline in the loop below, bounds-checked against the header end, so
-    // any batch size works (4/6/8/12/16) and missing packets (past the header)
-    // count as length 0. Inline (not an array via tiers) keeps the verifier cheap.
+    // Batch header at [data_meta, data): [u16 bitmap][u16 len_0]..[u16 len_14],
+    // network order (the 16th length is implicit). Packets are back to back
+    // from data. Each length is read inline, bounds-checked against data, so a
+    // shorter header (batch 4/8) makes the missing slots count as length 0.
+    // The offset mask is 0x7FFF so it covers the whole batch (16 * 1518 + 32 B
+    // in the 32 KB RX buffer); it only bounds the offset for the verifier, the
+    // data_end checks in handle_pkt are the real protection.
     __u8 *m = (__u8 *)data_meta;
-
-    // bpf_printk("valid: %d\n", bpf_ntohs(md->valid));
-    // bpf_printk("lens: %d %d %d %d\n", lens[0], lens[1], lens[2], lens[3]);
+    if (m + 2 > (__u8 *)data)
+        return ALL_DROP;
+    __u16 valid = bpf_ntohs(*(__u16 *)m);
 
     __u32 zero = 0;
-    
     int samplerate = 4;
-    
-    for( int i = 0; i < 16; i++ ) {
-        if(bpf_ntohs(md->valid) & (1 << i)) {
-            
+    __u16 lentot = 0;
+
+    for (int i = 0; i < BATCH; i++) {
+        if (valid & (1 << i)) {
             struct countmin *cm = bpf_map_lookup_elem(&countmin, &zero);
             if (!cm)
-            return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
-        
+                return ALL_DROP;
+
             __u32 random = bpf_get_prandom_u32();
-            if ((random & ((1 << samplerate)-1)) == 0){
-
+            if ((random & ((1 << samplerate) - 1)) == 0) {
                 struct pkt_5tuple pkt;
-                __u16 pkt_hashes[4];            
+                __u16 pkt_hashes[4];
 
-                int ret = handle_pkt(data+(lentot & 0x7FFF), data_end, &pkt);
-                if (ret){
-                    bpf_printk("handle_pkt failed at i %d\n", i);
-                    // bpf_printk("len i %d\n", lens[i]);
-                    return ret;
+                // on parse failure skip only this slot
+                if (handle_pkt(data + (lentot & 0x7FFF), data_end, &pkt) == 0) {
+                    hash(&pkt, sizeof(pkt), pkt_hashes);
+                    countmin_add(cm, pkt_hashes);
                 }
-                hash(&pkt, sizeof(pkt), pkt_hashes);
-                countmin_add(cm, pkt_hashes);
-                
             }
-            // advance by this packet's real length (0 if past the header)
-            __u8 *lp = m + 2 + (i << 1);
-            if (lp + 2 <= data)
-                lentot += bpf_ntohs(*(__u16 *)lp);
         }
+
+        // advance by this slot's length (0 if past the header), outside the
+        // validity test so skipped slots still move the offset
+        __u8 *lp = m + 2 + (i << 1);
+        if (lp + 2 <= (__u8 *)data)
+            lentot += bpf_ntohs(*(__u16 *)lp);
     }
 
-    return XDP_DROP + (XDP_DROP << 4) + (XDP_DROP << 8) + (XDP_DROP << 12) + (XDP_DROP << 16) + (XDP_DROP << 20) + (XDP_DROP << 24) + (XDP_DROP << 28);
+    return ALL_DROP;
 }
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
