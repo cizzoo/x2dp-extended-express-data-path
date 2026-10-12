@@ -241,7 +241,11 @@ static void l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid) {
  * two see exactly the same table and do exactly the same work per packet.
  * ------------------------------------------------------------------ */
 
-#define ROUTER_RULES_DIR "/home/vladimiro/bxdp/router/RCC25"
+/* Relative to dpdk/router/, where the app is run from; override at build
+ * time with CFLAGS=-DROUTER_RULES_DIR=\"/path/to/RCC25\". */
+#ifndef ROUTER_RULES_DIR
+#define ROUTER_RULES_DIR "../../router/RCC25"
+#endif
 /* the table is ~936k prefixes today; leave room to grow */
 #define ROUTER_MAX_RULES 1500000
 /* only ~9k prefixes are longer than /24, so tbl8 demand is modest */

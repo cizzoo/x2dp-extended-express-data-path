@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <arpa/inet.h>
 #include <assert.h> 
 
@@ -8,6 +9,7 @@
 #include "tbrouter.bpf.skel.h"
 
 int if_index;
+const char *rules_dir = "RCC25";
 struct tbrouter_bpf *tbrouter;
 
 struct ipv4_lpm_key {
@@ -60,8 +62,8 @@ void updatelpm() {
     for(__u8 i=8; i<=32;i++){
         __u64 count=0;
         FILE *fp;
-        char string[50];
-        sprintf(string,"/home/vladimiro/bxdp/router/RCC25/%d.txt",i);
+        char string[PATH_MAX];
+        snprintf(string, sizeof(string), "%s/%d.txt", rules_dir, i);
         fp = fopen(string, "r");
         char *line = NULL;
         size_t len = 0;
@@ -91,9 +93,11 @@ int main(int argc, char **argv)
 	int err;
 	if (argc < 2)
 	{
-		fprintf(stderr, "Usage: %s <ifname>\n", argv[0]);
+		fprintf(stderr, "Usage: %s <ifname> [rules_dir (default: RCC25)]\n", argv[0]);
 		return 1;
 	}
+	if (argc > 2)
+		rules_dir = argv[2];
 
 	bump_memlock_rlimit();
 
