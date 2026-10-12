@@ -1,3 +1,18 @@
+/*
+ * torouter — IPv4 LPM lookup behind an LRU flow cache, single-packet,
+ * forwarding path (t).
+ *
+ * NF:      router.bpf.c's lookup (Ethernet + IPv4, source address, non-IPv4
+ *          frames skipped) through resolve(): a BPF_MAP_TYPE_LRU_HASH
+ *          flow_cache (64k, keyed by the /32 source IP) is tried first; on a
+ *          miss the 1M-entry LPM trie is walked and a hit is inserted into the
+ *          cache.
+ * Variant: baseline — standard XDP, one invocation per packet. The
+ *          per-packet counterpart of tobrouter.
+ * Opt:     flow cache only (a hot flow costs one hash access, not a trie walk).
+ * Verdict: bare XDP_TX on every path.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

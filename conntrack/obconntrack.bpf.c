@@ -6,6 +6,27 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * obconntrack — stateful connection tracking, optimized batched (ob).
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c (TCP only, UDP
+ *          ignored, HASH `connections` map), with the state machine in a
+ *          FORCE_INLINE track() helper that takes the timestamp as a parameter.
+ * Variant: batched, up to 16 slots in a bounded (not unrolled) loop; bit i of
+ *          the `valid` bitmap gates slot i, lengths are read inline at
+ *          data_meta + 2 + 2*i and bounds-checked against data, and the offset
+ *          is masked with 0x7FFF and advanced for every slot.
+ * Opt:     one bpf_ktime_get_ns() per batch; all logging compiled out;
+ *          parse_pkt_fast() instead of parse_packet() (no printk, VLAN-aware
+ *          L4 offset, single exit); no per-packet key memset. A slot that is
+ *          not valid or fails to parse comes back with l4proto 0, so track()
+ *          is called unconditionally and skips it without forking verifier
+ *          state. No code reordering: one packet in flight per iteration,
+ *          because more exceeds the verifier limit at batch 16 (see the note
+ *          above obconntrack()).
+ * Verdict: packed nibbles, XDP_DROP in all 8 (also when the bitmap is missing).
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

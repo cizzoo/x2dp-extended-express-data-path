@@ -1,3 +1,21 @@
+/*
+ * toorouter — IPv4 LPM lookup, batched, reordered, forwarding path (t).
+ *
+ * NF:      same LPM trie lookup as tbrouter (1M entries, key built with
+ *          prefixlen=32 from the source address, no ethertype check); no flow
+ *          cache.
+ * Variant: batched, BATCH_SIZE 16; bit i of the `valid` bitmap gates slot i,
+ *          lengths read inline at data_meta + 2 + 2*i and bounds-checked
+ *          against data, offset masked with 0x7FFF and advanced for every
+ *          slot. A slot that fails to parse is cleared from `valid` and skips
+ *          only its own lookup.
+ * Opt:     code reordering — two fully unrolled passes: pass 1 parses all 16
+ *          source addresses into keys[] (no map access), pass 2 issues the 16
+ *          trie lookups back to back so their cache misses can overlap.
+ * Verdict: packed nibbles, XDP_TX in all 8. Only a missing bitmap header
+ *          returns a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

@@ -1,3 +1,16 @@
+/*
+ * swappass — MAC swap then pass, single-packet.
+ *
+ * Microbenchmark: the same rewrite as swaptx.bpf.c, but the packet continues up
+ * the stack instead of being transmitted — so the pair separates the cost of
+ * the rewrite from the cost of the TX path.
+ *
+ * NF:      swaps the Ethernet source and destination MAC addresses in place.
+ * Variant: baseline — one XDP invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_PASS.
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

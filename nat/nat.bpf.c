@@ -1,3 +1,16 @@
+/*
+ * nat — source NAT, single-packet baseline.
+ *
+ * NF:      reads the IPv4 source address, looks it up in the `external_map`
+ *          hash (up to 1M entries, loaded from nat_tbl.txt by the userspace
+ *          loader), rewrites ip->saddr with the translated address and
+ *          recomputes the IPv4 header checksum with bpf_csum_diff().
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_TX on success (the rewritten packet is sent back out),
+ *          bare XDP_DROP if the packet is malformed or has no mapping.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

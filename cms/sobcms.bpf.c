@@ -14,6 +14,27 @@
  * limitations under the License.
  */
 
+/*
+ * sobcms — Count-Min Sketch, batched, unrolled + split map access (so).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters, xxhash64 over the
+ *          IPv4 5-tuple.
+ * Variant: batched, same slot walk as bcms: `valid` bitmap, 16 slots, lengths
+ *          read inline from data_meta + 2 + 2*i (bounds-checked against
+ *          ctx->data), offset masked with 0x7FFF and advanced for every slot.
+ *          A slot that fails to parse is cleared from the `ok` mask, which
+ *          gates its hash and update; the batch goes on.
+ * Opt:     fully unrolled, processed as four groups of 4 slots (the loaded
+ *          counters of all 16 would need 512 B of stack). Within a group the
+ *          counter update is split in phases: parse all 4 -> hash +
+ *          countmin_load() all 4 -> countmin_store() all 4, so the
+ *          cache-missing loads of the group overlap instead of each one
+ *          stalling its own read-modify-write. Two packets of a group that hit
+ *          the same counter increment it once. One map lookup per batch.
+ * Verdict: packed nibbles, XDP_DROP in every slot, also when the header is
+ *          missing or the map lookup fails.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

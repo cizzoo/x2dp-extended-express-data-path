@@ -6,6 +6,27 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * salbconntrack — stateful connection tracking, batched, shared clock + no logs.
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c (TCP only, UDP
+ *          ignored, HASH `connections` map), with the state machine in a
+ *          FORCE_INLINE track() helper — here taking the current time as a
+ *          parameter instead of reading it itself.
+ * Variant: batched, same batch loop as bconntrack: up to 16 slots gated by the
+ *          `valid` bitmap, lengths read inline at data_meta + 2 + 2*i and
+ *          bounds-checked against data, offset masked with 0x7FFF and advanced
+ *          for every slot. A slot that fails parse_packet() is skipped on its
+ *          own.
+ * Opt:     two per-packet costs are removed from the batch. bpf_ktime_get_ns()
+ *          is called ONCE per batch and the timestamp is passed down to every
+ *          track() call, instead of one clock read per packet; and
+ *          bpf_log_debug() is redefined to a no-op at the top of the file, so
+ *          the debug logging the other variants still carry compiles away
+ *          (bpf_log_err stays, gated by log_level).
+ * Verdict: packed nibbles, XDP_DROP in all 8 (also when the bitmap is missing).
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

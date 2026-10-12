@@ -1,3 +1,25 @@
+/*
+ * bswappass — MAC swap then pass, batched.
+ *
+ * Microbenchmark: the batched counterpart of swappass.bpf.c — the same
+ * per-packet rewrite as bswaptx, but the batch goes up the stack instead of
+ * being transmitted, which separates the rewrite cost from the TX path.
+ *
+ * NF:      swaps the Ethernet source and destination MAC addresses of each
+ *          packet in place.
+ * Variant: batched — one XDP invocation per batch of up to 16 packets.
+ *          Reads the u16 bitmap at data_meta and walks 16 slots, skipping
+ *          those whose bit is clear; each slot's length is read inline at
+ *          data_meta + 2 + 2*i, bounds-checked against data (a slot past the
+ *          header counts as 0), and the running offset is masked with 0x7FFF
+ *          for the verifier.
+ *          A slot too short for an Ethernet header is left untouched and the
+ *          offset still advances.
+ * Opt:     none beyond batching.
+ * Verdict: packed nibbles (all 8), XDP_PASS in every slot; a packed XDP_DROP if
+ *          the batch header is missing.
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

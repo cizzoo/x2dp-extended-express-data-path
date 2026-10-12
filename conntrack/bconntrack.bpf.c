@@ -6,6 +6,26 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * bconntrack — stateful connection tracking, batched (X2DP).
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c (TCP only, UDP
+ *          ignored, HASH `connections` map), except that the tracking logic is
+ *          factored out of the program body into a FORCE_INLINE track() helper
+ *          so it can be applied per packet.
+ * Variant: batched — one XDP invocation per batch of up to 16. A loop over 16
+ *          slots gated by the `valid` bitmap (bit i = slot i); each length is
+ *          read inline at data_meta + 2 + 2*i, bounds-checked against data (a
+ *          slot past the header counts as 0), so one binary serves any batch
+ *          size. The offset is masked with 0x7FFF and advanced for every slot,
+ *          valid or not. A slot that fails parse_packet() (ARP, IPv6, non
+ *          TCP/UDP, truncated) is skipped; the rest of the batch is tracked.
+ * Opt:     none beyond batching — parse_packet() + track() per packet, one
+ *          bpf_ktime_get_ns() per packet, exactly as the baseline does per
+ *          invocation.
+ * Verdict: packed nibbles, XDP_DROP in all 8 (also when the bitmap is missing).
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

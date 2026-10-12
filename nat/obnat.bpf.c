@@ -1,3 +1,28 @@
+/*
+ * obnat — source NAT, batched + reordered + unrolled (ob).
+ *
+ * NF:      same source NAT as nat.bpf.c — `external_map` lookup on ip->saddr,
+ *          address rewrite, IPv4 checksum recomputed with bpf_csum_diff().
+ * Variant: batched — one XDP invocation per batch of up to 16 packets.
+ *          Reads the u16 bitmap at data_meta and walks 16 slots, skipping
+ *          those whose bit is clear; each slot's length is read inline at
+ *          data_meta + 2 + 2*i, bounds-checked against data (a slot past the
+ *          header counts as 0), and the running offset is masked with 0x7FFF
+ *          for the verifier.
+ * Opt:     code reordering in two phases, each a bounded loop over 16 slots
+ *          with 4-way partial unrolling (#pragma unroll(4)): phase 1 runs
+ *          get_ip() and the map lookup for every slot, so the independent hash
+ *          probes are issued back to back, and stores the translated address
+ *          (or the slot's own source IP on a miss) in nat_vals[16]; phase 2
+ *          recomputes the offsets from the header and runs every
+ *          update_ipaddr(). A miss therefore rewrites saddr with itself
+ *          (only the checksum is recomputed); a too-short frame is skipped by
+ *          update_ipaddr()'s own bounds check. Full 16x unrolling exceeds the
+ *          1M-insn verifier limit on the variable-offset packet writes.
+ * Verdict: packed nibbles (all 8), XDP_DROP in every slot; also a packed
+ *          XDP_DROP if the batch header is missing.
+ */
+
 #include <arpa/inet.h>
 #include <bpf/bpf_endian.h>
 #include <linux/bpf.h>

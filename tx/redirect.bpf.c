@@ -1,4 +1,24 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+
+/*
+ * redirect — bpf_redirect_map() forwarding, single-packet.
+ *
+ * Microbenchmark: the third way out of XDP, next to tx.bpf.c (bounce back out
+ * the same NIC) and pass.bpf.c (up the stack) — forwarding to another device
+ * through a DEVMAP.
+ *
+ * NF:      parses Ethernet + IPv4, looks the source MAC up in the
+ *          `redirect_params` hash to get a destination MAC, writes it into the
+ *          frame and redirects to port 0 of the `tx_port` DEVMAP. Both maps are
+ *          filled by the loader.
+ * Variant: baseline — plain per-packet XDP, one invocation per packet. Not
+ *          an X2DP program: the X2DP driver does not support XDP_REDIRECT, so
+ *          this only runs on a stock driver.
+ * Opt:     none.
+ * Verdict: bare bpf_redirect_map() result; bare XDP_DROP when the packet is
+ *          malformed, is not IPv4, or its source MAC has no entry.
+ */
+
 #include <linux/bpf.h>
 
 #include <bpf/bpf_endian.h>

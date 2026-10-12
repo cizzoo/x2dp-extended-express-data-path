@@ -14,6 +14,31 @@
  * limitations under the License.
  */
 
+/*
+ * aobnitro1 — NitroSketch flavour 1 (uniform sampling), batched, unrolled +
+ *             AVX-512 hashing (aob).
+ *
+ * NF:      CMS, 4 rows x 1M counters (indexed by 16-bit slices of one
+ *          xxhash64 over the IPv4 5-tuple, so only the first 64K of each row
+ *          are hit), updated only for sampled packets.
+ * Variant: batched — one XDP invocation per batch of up to 16. The loop walks
+ *          all 16 slots gated by the bitmap at data_meta; slot i's length is
+ *          read inline from data_meta + 2 + 2*i, bounds-checked against data
+ *          (a slot past the header counts as 0, so batch 4..16 all work), and
+ *          the running offset is masked with 0x7FFF. The offset advances for
+ *          every slot, valid, skipped or not. A non-IPv4 TCP/UDP or truncated
+ *          packet skips only its own slot.
+ * Opt:     whole-batch sampling: ONE bpf_get_prandom_u32() per batch, and the
+ *          batch is processed only when its low samplerate=4 bits are zero
+ *          (1 in 16, same mean rate as per-packet sampling, but all 16 SIMD
+ *          lanes are used when it is). Then one countmin lookup and three
+ *          phases: parse every valid slot into a zeroed, 32-byte-aligned
+ *          pkts[16], ONE xxhash16x16() kfunc call, update all 4 rows for each
+ *          parsed slot. The parse and update loops are fully unrolled.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: XDP_DROP packed in all 8 nibbles (ALL_DROP).
+ */
+
 // aobnitro1: optimized batched NitroSketch (uniform sampling) with the SIMD
 // hash kfunc (B4). Shared per-batch work (B3): ONE PRNG draw decides the whole
 // batch (processed with probability 1/2^samplerate, same mean sampling rate as

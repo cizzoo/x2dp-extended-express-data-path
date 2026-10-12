@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/*
+ * tbcms — Count-Min Sketch, batched, forwarding path (t).
+ *
+ * NF:      CMS as in cms.bpf.c (4 rows x 1M counters), but keyed with
+ *          fasthash64 over the 5-tuple instead of xxhash64.
+ * Variant: batched, same slot walk as bcms: `valid` bitmap, 16-slot loop,
+ *          lengths read inline from data_meta + 2 + 2*i (bounds-checked
+ *          against ctx->data), offset masked with 0x7FFF and advanced for every
+ *          slot. A packet that is not IPv4 TCP/UDP is skipped; the batch goes
+ *          on.
+ * Opt:     none beyond batching — one map lookup per batch.
+ * Verdict: packed nibbles, XDP_TX in every slot — the batch is sent back out
+ *          instead of dropped, for the latency tests. A missing header or a
+ *          failed map lookup returns a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

@@ -28,6 +28,12 @@ There is no test suite. The checks are: the program has to pass the verifier at 
 
 `eval/run.py` runs a suite from `eval/suites/*.json`. Each suite is a list of runs, and each run has a `mode` (`baseline` or `x2dp`), `batch-sizes`, `progs` (paths relative to the repo root; `@` in `args` expands to the repo root) and `metrics`. The runner switches the card's mode with the onic-driver `ioctl` utility (`-c 0` baseline, `-c 1` X²DP, `-c 9 -w N` batch size), measures throughput with `ioctl -c 3 -w T`, and measures IPC and stalls with `perf stat -b <prog id>`. The program name used for `bpftool`/`perf` is the basename of the path, so the `SEC("xdp")` function must be named like its file. If you add or rename a variant that a suite references, update the suite too. `eval/traffic/` holds the trace generator, the NAT table builder and the TCP-session generator for conntrack. Traffic is replayed from a separate machine, which is not covered here.
 
+## Adding or editing a variant
+
+The skeleton-based loader ties three names together, and **the `SEC("xdp")` function name, the file basename and the Makefile target must all match**. `make -C cms bcms` produces `bcms.bpf.skel.h`, which declares `struct bcms_bpf`, `bcms_bpf__open_and_load()` and `skel->progs.bcms`, and the loader `cms/bcms.c` uses exactly those names. To add a variant, copy the `.bpf.c`/`.c` pair, rename the program function to the new basename, fix the skeleton include and the `<name>_bpf` symbols in the loader, and append the name to `TARGETS`.
+
+Each variant is a separate measurement point, so the duplication across variants is deliberate. Do not refactor variants into a common implementation.
+
 ## Variant naming convention
 
 The prefixes on a base name (`cms`, `nat`, `router`, `conntrack`, `nitro1`/`nitro2`, ...) are combined, e.g. `aobcms`:
@@ -54,6 +60,7 @@ The prefixes on a base name (`cms`, `nat`, `router`, `conntrack`, `nitro1`/`nitr
 
 - N is capped at 16 because of the 512 B BPF stack and the 1M-instruction verifier limit. Both grow linearly with batch size.
 - Unrolling the whole batch can blow the instruction limit, especially with variable-offset packet **writes** (NAT `update_ipaddr`). `nat/obnat.bpf.c` uses 4-way partial unrolling so the verifier converges on the loop back-edge. In `conntrack/lpobconntrack.bpf.c`, keeping several packets in flight through the state machine multiplies verifier states: only 1 packet in flight is accepted at batch 16. These header comments record measured results, so read them before restructuring.
+- `__sync_fetch_and_add` on the sketch counters produces code the verifier rejects, so the code uses a plain increment instead (see `countmin_add`). Do not change it back to an atomic.
 - Remove `bpf_printk` from hot paths. Each call costs about 1 µs, and several existing parsers are not gated by a log level.
 - Share per-batch work across the batch. Do one map lookup for the CMS array, one `bpf_ktime_get_ns()` per batch, and one `bpf_get_prandom_u32()` for NitroSketch, instead of one per packet.
 

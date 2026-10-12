@@ -1,3 +1,21 @@
+/*
+ * tobrouter — IPv4 LPM lookup behind an LRU flow cache, batched, forwarding
+ * path (t).
+ *
+ * NF:      torouter's resolve(): BPF_MAP_TYPE_LRU_HASH flow_cache (64k, keyed
+ *          by the /32 source IP) first, LPM trie (1M entries) on a miss, and a
+ *          trie hit is inserted into the cache. handle_pkt() takes the source
+ *          address without checking the ethertype.
+ * Variant: batched, same batch loop as tbrouter: up to 16 slots gated by the
+ *          `valid` bitmap, lengths read inline at data_meta + 2 + 2*i and
+ *          bounds-checked against data, offset masked with 0x7FFF and advanced
+ *          for every slot. A slot that fails to parse is skipped on its own.
+ * Opt:     the flow cache only; parse and resolve stay interleaved per packet
+ *          (no unrolling or reordering).
+ * Verdict: packed nibbles, XDP_TX in all 8. Only a missing bitmap header
+ *          returns a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

@@ -1,3 +1,18 @@
+/*
+ * tbrouter — IPv4 LPM lookup, batched, forwarding path (t).
+ *
+ * NF:      same LPM trie lookup as brouter.bpf.c (1M entries, key built with
+ *          prefixlen=32 from the source address, no ethertype check).
+ * Variant: batched, same batch loop as brouter: up to 16 slots gated by the
+ *          `valid` bitmap, lengths read inline at data_meta + 2 + 2*i and
+ *          bounds-checked against data, offset masked with 0x7FFF and advanced
+ *          for every slot. A slot that fails to parse is skipped on its own.
+ * Opt:     none beyond batching — one trie lookup per packet, in a loop.
+ * Verdict: packed nibbles, XDP_TX in all 8 — the looked-up batch is sent back
+ *          out, so the measurement covers the TX path. Only a missing bitmap
+ *          header returns a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

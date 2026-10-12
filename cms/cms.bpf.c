@@ -14,6 +14,18 @@
  * limitations under the License.
  */
 
+/*
+ * cms — Count-Min Sketch, single-packet baseline.
+ *
+ * NF:      Count-Min Sketch over the IPv4 5-tuple. HASHFN_N=4 rows x
+ *          COLUMNS=1M counters held in a single BPF_MAP_TYPE_ARRAY entry; one
+ *          xxhash64 per packet, sliced into four 16-bit row indices.
+ * Variant: baseline — standard XDP, one invocation per packet. This is the
+ *          reference every batched CMS variant is measured against.
+ * Opt:     none.
+ * Verdict: bare XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

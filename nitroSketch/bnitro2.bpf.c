@@ -14,6 +14,28 @@
  * limitations under the License.
  */
 
+/*
+ * bnitro2 — NitroSketch flavour 2 (geometric sampling), batched.
+ *
+ * NF:      CMS, 4 rows x 1M counters (indexed by 16-bit slices of one
+ *          xxhash64 over the IPv4 5-tuple, so only the first 64K of each row
+ *          are hit), updated one row at a time on the schedule given by the
+ *          `geosampling` table (see nitro2.bpf.c for the sampling scheme).
+ * Variant: batched — one XDP invocation per batch of up to 16. The loop walks
+ *          all 16 slots gated by the bitmap at data_meta; slot i's length is
+ *          read inline from data_meta + 2 + 2*i, bounds-checked against data
+ *          (a slot past the header counts as 0, so batch 4..16 all work), and
+ *          the running offset is masked with 0x7FFF. The offset advances for
+ *          every slot, valid, skipped or not. A non-IPv4 TCP/UDP or truncated
+ *          packet skips only its own slot.
+ * Opt:     batching only (paper Listing 1), per-packet logic unchanged: for
+ *          each valid slot a geosampling lookup and countdown check (above
+ *          HASHFN_N: countdown -= HASHFN_N, slot not sampled), then a countmin
+ *          lookup, parse, scalar xxhash64 and nitro_update() on the rows the
+ *          geometric skips land on, exactly as nitro2.
+ * Verdict: XDP_DROP packed in all 8 nibbles (ALL_DROP).
+ */
+
 // bnitro2: batched NitroSketch (geometric sampling), per-packet logic unchanged
 // (paper Listing 1): for each valid slot the same steps as nitro2 (geo lookup,
 // skip check, countmin lookup, parse, hash, update).

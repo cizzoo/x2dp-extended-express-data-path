@@ -14,6 +14,26 @@
  * limitations under the License.
  */
 
+/*
+ * bnitro1 — NitroSketch flavour 1 (uniform sampling), batched.
+ *
+ * NF:      CMS, 4 rows x 1M counters (indexed by 16-bit slices of one
+ *          xxhash64 over the IPv4 5-tuple, so only the first 64K of each row
+ *          are hit), updated only for sampled packets.
+ * Variant: batched — one XDP invocation per batch of up to 16. The loop walks
+ *          all 16 slots gated by the bitmap at data_meta; slot i's length is
+ *          read inline from data_meta + 2 + 2*i, bounds-checked against data
+ *          (a slot past the header counts as 0, so batch 4..16 all work), and
+ *          the running offset is masked with 0x7FFF. The offset advances for
+ *          every slot, valid, skipped or not. A non-IPv4 TCP/UDP or truncated
+ *          packet skips only its own slot.
+ * Opt:     batching only (paper Listing 1), per-packet logic unchanged: for
+ *          each valid slot one countmin lookup and one bpf_get_prandom_u32();
+ *          the slot is parsed, hashed (scalar xxhash64) and added to all 4
+ *          rows when the low samplerate=4 bits are zero (1 in 16).
+ * Verdict: XDP_DROP packed in all 8 nibbles (ALL_DROP).
+ */
+
 // bnitro1: batched NitroSketch (uniform sampling), per-packet logic unchanged
 // (paper Listing 1): for each valid slot one map lookup, one PRNG draw and, if
 // sampled, parse + xxhash64 + count-min update.

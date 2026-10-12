@@ -1,3 +1,17 @@
+/*
+ * router — IPv4 longest-prefix-match lookup, single-packet baseline.
+ *
+ * NF:      parses Ethernet + IPv4 and does one lookup of the source address in
+ *          a BPF_MAP_TYPE_LPM_TRIE (1M entries, BPF_F_NO_PREALLOC), filled by
+ *          the loader from <rules_dir>/<prefixlen>.txt (default RCC25). The
+ *          key is built with prefixlen=32; the trie does the longest-prefix
+ *          match. Non-IPv4 or short frames skip the lookup. The result is only
+ *          looked at, not acted on — this measures the lookup, not forwarding.
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_DROP on every path.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

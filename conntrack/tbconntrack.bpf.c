@@ -6,6 +6,22 @@
 /* Copyright (c) 2017 The Polycube Authors */
 /* Copyright (c) 2022 Sebastiano Miano <mianosebastiano@gmail.com> */
 
+/*
+ * tbconntrack — stateful connection tracking, batched, forwarding path (t).
+ *
+ * NF:      same Polycube-derived conntrack as conntrack.bpf.c (TCP only, UDP
+ *          ignored, HASH `connections` map), with the state machine in a
+ *          FORCE_INLINE track() helper.
+ * Variant: batched, same batch loop as bconntrack: up to 16 slots gated by the
+ *          `valid` bitmap, lengths read inline at data_meta + 2 + 2*i and
+ *          bounds-checked against data, offset masked with 0x7FFF and advanced
+ *          for every slot. A slot that fails to parse is skipped on its own.
+ * Opt:     none beyond batching (one bpf_ktime_get_ns() per packet).
+ * Verdict: packed nibbles, XDP_TX in all 8 — the tracked batch is sent back
+ *          out instead of dropped, so the measurement covers the TX path. Only
+ *          a missing bitmap header returns a packed XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>

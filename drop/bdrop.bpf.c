@@ -1,3 +1,18 @@
+/*
+ * bdrop — bare packed XDP_DROP, batched.
+ *
+ * Microbenchmark: the floor of the batching path, the counterpart of
+ * drop.bpf.c. The program touches nothing — not even the batch header — and
+ * immediately returns the packed verdict, so against drop.bpf.c it measures
+ * what one XDP call per batch saves over one per packet.
+ *
+ * NF:      none.
+ * Variant: batched — one XDP invocation per batch, no walk at all.
+ * Opt:     none.
+ * Verdict: packed nibbles, XDP_DROP in every slot (the packed XDP_PASS form is
+ *          left commented out beside it).
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <bpf/bpf_helpers.h>

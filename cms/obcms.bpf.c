@@ -14,6 +14,26 @@
  * limitations under the License.
  */
 
+/*
+ * obcms — Count-Min Sketch, batched + unrolled (o).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters, xxhash64 over the
+ *          IPv4 5-tuple.
+ * Variant: batched, same slot walk as bcms: `valid` bitmap, 16 slots, lengths
+ *          read inline from data_meta + 2 + 2*i (bounds-checked against
+ *          ctx->data), offset masked with 0x7FFF and advanced for every slot.
+ *          A slot that fails to parse is cleared from the `ok` mask, which
+ *          gates its hash and update; the batch goes on.
+ * Opt:     fully unrolled (#pragma unroll) and reordered into three phases:
+ *          all 16 handle_pkt() calls, then the 16 hashes, then the 16 sketch
+ *          updates, so independent work belonging to different packets can
+ *          overlap instead of serialising per packet. Tuples and sub-hashes
+ *          live in stack arrays (336 B). hash() is called with the
+ *          compile-time sizeof(struct pkt_5tuple). One map lookup per batch.
+ * Verdict: packed nibbles, XDP_DROP in every slot, also when the header is
+ *          missing or the map lookup fails.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

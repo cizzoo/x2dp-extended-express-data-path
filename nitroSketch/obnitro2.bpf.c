@@ -14,11 +14,39 @@
  * limitations under the License.
  */
 
+/*
+ * obnitro2 — NitroSketch flavour 2 (geometric sampling), batched + reordered.
+ *
+ * NF:      CMS, 4 rows x 1M counters (indexed by 16-bit slices of one
+ *          xxhash64 over the IPv4 5-tuple, so only the first 64K of each row
+ *          are hit), updated one row at a time on the schedule given by the
+ *          `geosampling` table (see nitro2.bpf.c for the sampling scheme).
+ * Variant: batched — one XDP invocation per batch of up to 16. The loop walks
+ *          all 16 slots gated by the bitmap at data_meta; slot i's length is
+ *          read inline from data_meta + 2 + 2*i, bounds-checked against data
+ *          (a slot past the header counts as 0, so batch 4..16 all work), and
+ *          the running offset is masked with 0x7FFF. The offset advances for
+ *          every slot, valid, skipped or not. A non-IPv4 TCP/UDP or truncated
+ *          packet skips only its own slot.
+ * Opt:     one geosampling and one countmin lookup per batch (B3), then code
+ *          reordering (Listing 2) into three phases.
+ *          Phase 1 walks the slots in order as nitro2 does: a valid slot is
+ *          skipped while the countdown is above HASHFN_N (countdown -=
+ *          HASHFN_N), otherwise it is parsed and geo_rows() walks the
+ *          geometric schedule to get the mask of rows it updates. The schedule
+ *          runs on local copies of count/cursor, written back once at the end;
+ *          a parse failure leaves it untouched.
+ *          Phase 1 is not unrolled (each packet depends on the previous one's
+ *          schedule, and unrolling overflows the 512 B stack). Phase 2 hashes
+ *          (scalar xxhash64) and phase 3 updates the scheduled rows of every
+ *          slot with a non-empty mask, both fully unrolled.
+ * Verdict: XDP_DROP packed in all 8 nibbles (ALL_DROP).
+ */
+
 // obnitro2: optimized batched NitroSketch (geometric sampling). Shared per-batch
-// work (B3): one geo lookup, one skip check and one countmin lookup per batch;
-// if the next geometric update is beyond this batch the whole batch is skipped.
-// Otherwise code reordering + unrolling (Listing 2): parse all valid slots,
-// then hash them, then update the sketch, each phase fully unrolled.
+// work (B3): one geo lookup and one countmin lookup per batch. The geometric
+// schedule is walked packet by packet, then code reordering + unrolling
+// (Listing 2): parse the valid slots, hash them, update the sampled rows.
 
 #include <linux/bpf.h>
 #include <linux/filter.h>

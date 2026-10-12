@@ -14,9 +14,40 @@
  * limitations under the License.
  */
 
+/*
+ * aobnitro2 — NitroSketch flavour 2 (geometric sampling), batched, unrolled +
+ *             AVX-512 hashing (aob).
+ *
+ * NF:      CMS, 4 rows x 1M counters (indexed by 16-bit slices of one
+ *          xxhash64 over the IPv4 5-tuple, so only the first 64K of each row
+ *          are hit), updated one row at a time on the schedule given by the
+ *          `geosampling` table (see nitro2.bpf.c for the sampling scheme).
+ * Variant: batched — one XDP invocation per batch of up to 16. The loop walks
+ *          all 16 slots gated by the bitmap at data_meta; slot i's length is
+ *          read inline from data_meta + 2 + 2*i, bounds-checked against data
+ *          (a slot past the header counts as 0, so batch 4..16 all work), and
+ *          the running offset is masked with 0x7FFF. The offset advances for
+ *          every slot, valid, skipped or not. A non-IPv4 TCP/UDP or truncated
+ *          packet skips only its own slot.
+ * Opt:     same code as abnitro2 except that the phase 1 and phase 3 loops
+ *          are fully unrolled (#pragma unroll). One geosampling and one
+ *          countmin lookup per batch, then three phases.
+ *          Phase 1 walks the slots in order as nitro2 does: a valid slot is
+ *          skipped while the countdown is above HASHFN_N (countdown -=
+ *          HASHFN_N), otherwise it is parsed and geo_rows() walks the
+ *          geometric schedule to get the mask of rows it updates. The schedule
+ *          runs on local copies of count/cursor, written back once at the end;
+ *          a parse failure leaves it untouched.
+ *          Parsed keys go into a zeroed, 32-byte-aligned pkts[16]. Phase 2 is
+ *          ONE xxhash16x16() kfunc call for the batch (always made); phase 3
+ *          updates the scheduled rows of every slot with a non-empty mask.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: XDP_DROP packed in all 8 nibbles (ALL_DROP).
+ */
+
 // aobnitro2: optimized batched NitroSketch (geometric sampling) with the SIMD
-// hash kfunc (B4). Shared per-batch work (B3): one geo lookup / skip check and
-// one countmin lookup per batch (whole-batch geometric skip). Then: parse all
+// hash kfunc (B4). Shared per-batch work (B3): one geo lookup and one countmin
+// lookup per batch; the geometric schedule is walked packet by packet. Then: parse all
 // valid slots, ONE xxhash16x16 call, update the sketch (phases unrolled).
 
 #include <linux/bpf.h>

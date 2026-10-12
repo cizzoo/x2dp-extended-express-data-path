@@ -1,3 +1,16 @@
+/*
+ * btx — bare packed XDP_TX, batched.
+ *
+ * Microbenchmark: the batched counterpart of tx.bpf.c. Touches nothing — not
+ * even the batch header — and returns the packed verdict, so the driver
+ * transmits the whole batch back out after one XDP call.
+ *
+ * NF:      none.
+ * Variant: batched — one XDP invocation per batch, no walk at all.
+ * Opt:     none.
+ * Verdict: packed nibbles, XDP_TX in every slot.
+ */
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

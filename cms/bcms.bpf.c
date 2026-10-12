@@ -14,6 +14,24 @@
  * limitations under the License.
  */
 
+/*
+ * bcms — Count-Min Sketch, batched (X2DP).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters, xxhash64 over the
+ *          IPv4 5-tuple.
+ * Variant: batched — one XDP invocation per batch. Reads the `valid` bitmap
+ *          from data_meta, then walks 16 slots in a plain loop. Each slot's
+ *          length is read inline from data_meta + 2 + 2*i, bounds-checked
+ *          against ctx->data (0 past the header), so the one binary serves any
+ *          batch size the NIC produces (4/6/8/12/16). The running offset is
+ *          masked with 0x7FFF and advanced for every slot, valid or not. A
+ *          packet that is not IPv4 TCP/UDP is skipped; the batch goes on.
+ * Opt:     none beyond batching — the map lookup is hoisted out of the loop
+ *          (one per batch); parse, hash and update stay per packet, in order.
+ * Verdict: packed nibbles, XDP_DROP in every slot, also when the header is
+ *          missing or the map lookup fails.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

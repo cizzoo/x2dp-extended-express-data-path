@@ -1,3 +1,21 @@
+/*
+ * brouter — IPv4 LPM lookup, batched.
+ *
+ * NF:      same LPM trie lookup as router.bpf.c (1M entries, key built with
+ *          prefixlen=32 from the source address); handle_pkt() builds the key
+ *          per packet. Unlike router.bpf.c it does not check the ethertype:
+ *          any frame long enough for Ethernet + IPv4 headers is looked up.
+ * Variant: batched — one XDP invocation per batch of up to 16. A loop over 16
+ *          slots gated by the `valid` bitmap (bit i = slot i); each length is
+ *          read inline at data_meta + 2 + 2*i, bounds-checked against data (a
+ *          slot past the header counts as 0), so one binary serves any batch
+ *          size. The offset is masked with 0x7FFF and advanced for every slot,
+ *          valid or not. A slot that fails handle_pkt() is skipped; the rest
+ *          of the batch is still looked up.
+ * Opt:     none beyond batching — one trie lookup per packet, in a loop.
+ * Verdict: packed nibbles, XDP_DROP in all 8 (also when the bitmap is missing).
+ */
+
 #include <linux/bpf.h>
 
 #include <arpa/inet.h>

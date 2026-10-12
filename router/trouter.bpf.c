@@ -1,3 +1,14 @@
+/*
+ * trouter — IPv4 LPM lookup, single-packet, forwarding path (t).
+ *
+ * NF:      same LPM trie lookup as router.bpf.c (1M entries, key built with
+ *          prefixlen=32 from the source address; non-IPv4 frames skip it).
+ * Variant: baseline — standard XDP, one invocation per packet.
+ * Opt:     none.
+ * Verdict: bare XDP_TX on every path — the per-packet reference for tbrouter,
+ *          so the batched forwarding numbers have a single-packet counterpart.
+ */
+
 #include <linux/bpf.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>

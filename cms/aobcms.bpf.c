@@ -14,6 +14,25 @@
  * limitations under the License.
  */
 
+/*
+ * aobcms — Count-Min Sketch, batched, unrolled + AVX-512 hashing (aob).
+ *
+ * NF:      same CMS as cms.bpf.c — 4 rows x 1M counters keyed on the IPv4
+ *          5-tuple; row r uses bits [16r, 16r + 16) of the 64-bit hash.
+ * Variant: batched, same slot walk as bcms: `valid` bitmap, 16 slots, lengths
+ *          read inline from data_meta + 2 + 2*i (bounds-checked against
+ *          ctx->data), offset masked with 0x7FFF and advanced for every slot.
+ *          A slot that fails to parse is cleared from the `ok` mask and
+ *          skipped; the batch goes on.
+ * Opt:     abcms's AVX-512 hashing combined with obcms's reordering, in three
+ *          phases: parse all 16 into pkts[16] (#pragma unroll) -> ONE
+ *          xxhash16x16() kfunc call hashing all 16 keys -> countmin_add() for
+ *          every slot set in `ok` (#pragma unroll). One map lookup per batch.
+ * Needs:   the xxhash kernel module loaded first — `make -C xxhash load`.
+ * Verdict: packed nibbles, XDP_DROP in every slot, also when the header is
+ *          missing or the map lookup fails.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>

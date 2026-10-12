@@ -14,6 +14,25 @@
  * limitations under the License.
  */
 
+/*
+ * nitro2 — NitroSketch flavour 2 (geometric sampling), single-packet baseline.
+ *
+ * NF:      Count-Min Sketch, 4 rows x 1M counters (indexed by 16-bit slices
+ *          of one xxhash64 over the IPv4 5-tuple, so only the first 64K of
+ *          each row are hit), updated one ROW at a time by nitro_add().
+ * Variant: baseline — one XDP invocation per packet.
+ * Opt:     proper NitroSketch sampling. A `geosampling` map holds a
+ *          precomputed table of geometric random variates (filled by the
+ *          loader, which is why it links against GSL), a cursor and a
+ *          countdown in rows. While the countdown is above HASHFN_N the packet
+ *          is skipped and the countdown drops by HASHFN_N; otherwise the
+ *          packet is parsed and hashed, and only the rows the geometric skips
+ *          land on are updated, each skip read from the table. No per-packet
+ *          randomness (nitro1). A packet that is not IPv4 TCP/UDP or is
+ *          truncated returns before the schedule moves.
+ * Verdict: bare XDP_DROP.
+ */
+
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/icmp.h>
